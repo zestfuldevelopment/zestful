@@ -1,3 +1,9 @@
+//! Zestful CLI — agent notification tool.
+//!
+//! A single binary that provides both the CLI (`notify`, `watch`, `ssh`) and
+//! the focus daemon (`daemon`). CLI commands are synchronous; the daemon starts
+//! an async tokio/axum runtime for terminal focus switching.
+
 mod cmd;
 mod config;
 mod focus;

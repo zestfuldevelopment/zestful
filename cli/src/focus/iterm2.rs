@@ -1,3 +1,9 @@
+//! iTerm2 focus handler (macOS only).
+//!
+//! Uses the [`iterm2-client`](https://crates.io/crates/iterm2-client) crate for
+//! native WebSocket + Protobuf communication with iTerm2 — no Python dependency.
+//! Falls back to AppleScript activation if the API is unavailable.
+
 use anyhow::Result;
 
 /// Focus an iTerm2 tab using the native iterm2-client crate.

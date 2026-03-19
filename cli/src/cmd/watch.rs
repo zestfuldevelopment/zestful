@@ -1,7 +1,14 @@
+//! `zestful watch` — run a command and notify when it finishes.
+//!
+//! Spawns the command as a child process, captures the exit code, and sends a
+//! notification with severity based on success/failure. Auto-detects `$TERM_PROGRAM`
+//! for click-to-focus.
+
 use crate::{cmd::notify, config};
 use anyhow::{bail, Result};
 use std::process::Command;
 
+/// Execute the `watch` command: run child process, then send notification.
 pub fn run(agent: String, command: Vec<String>) -> Result<()> {
     if command.is_empty() {
         bail!("zestful watch requires a command");

@@ -1,3 +1,8 @@
+//! `zestful notify` — send a notification to the Zestful Mac app.
+//!
+//! Builds a JSON payload and POSTs it to `localhost:{port}/notify` with the
+//! auth token. Applies saved focus context if `--app` is not explicitly passed.
+
 use crate::config;
 use anyhow::{bail, Result};
 use serde::Serialize;
@@ -21,6 +26,7 @@ fn is_true(v: &bool) -> bool {
     *v
 }
 
+/// Execute the `notify` command: read config, apply focus context, send HTTP POST.
 pub fn run(
     agent: String,
     message: String,

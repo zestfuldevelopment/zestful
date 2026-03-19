@@ -2,7 +2,7 @@
 
 All notable changes to the Zestful CLI will be documented in this file.
 
-## [Unreleased]
+## [0.1.1] - 2026-03-19
 
 ### Security
 - Fix command injection in osascript: AppleScript string escaping and input validation on app/window_id/tab_id (reject shell metacharacters)
@@ -10,6 +10,13 @@ All notable changes to the Zestful CLI will be documented in this file.
 - Prevent PID file symlink attacks: refuse to write if path is a symlink
 - Validate kitty socket discovery: reject symlinks, confirm file is a Unix socket
 - Guard `kill(pid, 0)` against pid <= 0 to prevent signaling process group 0
+
+### Changed
+- Updated README with Rust build instructions, architecture section, and daemon docs
+- Added module-level and public API doc comments across all Rust source files
+
+### Removed
+- Old bash CLI script and Node.js daemon (replaced in 0.1.0)
 
 ## [0.1.0] - 2026-03-19
 

@@ -1,33 +1,51 @@
+//! Configuration helpers for reading tokens, ports, focus context, and managing
+//! the daemon lifecycle.
+//!
+//! Config files live in `~/.config/zestful/`:
+//! - `local-token` — auth token shared with the Mac app
+//! - `port` — override for the Mac app's HTTP port (default 21547)
+//! - `focus-context` — saved focus state (`app=`, `window_id=`, `tab_id=`)
+//! - `zestfuld.pid` — PID of the running focus daemon
+
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+/// Default port for the Zestful Mac app's HTTP server.
 const DEFAULT_PORT: u16 = 21547;
+
+/// Port the focus daemon listens on.
 const DAEMON_PORT: u16 = 21548;
 
+/// Returns `~/.config/zestful/`.
 pub fn config_dir() -> PathBuf {
     let home = env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     PathBuf::from(home).join(".config").join("zestful")
 }
 
+/// Path to the auth token file.
 pub fn token_file() -> PathBuf {
     config_dir().join("local-token")
 }
 
+/// Path to the port override file.
 pub fn port_file() -> PathBuf {
     config_dir().join("port")
 }
 
+/// Path to the focus context file.
 pub fn focus_file() -> PathBuf {
     config_dir().join("focus-context")
 }
 
+/// Path to the daemon PID file.
 pub fn pid_file() -> PathBuf {
     config_dir().join("zestfuld.pid")
 }
 
+/// Returns the daemon's listening port (21548).
 pub fn daemon_port() -> u16 {
     DAEMON_PORT
 }

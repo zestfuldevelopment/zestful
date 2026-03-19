@@ -1,3 +1,9 @@
+//! Terminal focus handlers.
+//!
+//! Each submodule implements focus switching for a specific terminal emulator.
+//! The [`handle_focus`] function dispatches to the correct handler based on the
+//! app name. All inputs are validated against an allowlist before use.
+
 #[cfg(target_os = "macos")]
 pub mod iterm2;
 pub mod kitty;

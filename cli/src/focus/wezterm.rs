@@ -1,3 +1,7 @@
+//! WezTerm focus handler.
+//!
+//! Uses the `wezterm cli activate-tab` command to switch tabs.
+
 use anyhow::Result;
 
 /// Focus a WezTerm tab.

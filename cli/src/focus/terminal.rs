@@ -1,3 +1,8 @@
+//! Terminal.app focus handler (macOS only).
+//!
+//! Uses AppleScript to iterate Terminal.app windows/tabs and select the one
+//! whose tty matches the given tab ID.
+
 use anyhow::Result;
 
 /// Focus a Terminal.app tab by tty.

@@ -1,3 +1,9 @@
+//! Focus daemon — axum HTTP server on `localhost:21548`.
+//!
+//! Receives focus commands from the Zestful Mac app and dispatches them to the
+//! appropriate terminal handler (kitty, iTerm2, WezTerm, Terminal.app, or generic).
+//! Requires `X-Zestful-Token` authentication.
+
 use crate::config;
 use crate::focus;
 use anyhow::Result;
@@ -23,6 +29,7 @@ struct StatusResponse {
     status: String,
 }
 
+/// Start the focus daemon. Creates a tokio runtime and runs the axum server.
 pub fn run() -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(run_server())

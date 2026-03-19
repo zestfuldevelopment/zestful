@@ -1,7 +1,14 @@
+//! `zestful ssh` — SSH with Zestful forwarding.
+//!
+//! Syncs the auth token, port, and focus context to the remote host, then
+//! `exec`s `ssh -R` to set up a reverse port forward. Remote agents can then
+//! call `zestful notify` and the notifications route back to the local Mac app.
+
 use crate::config;
 use anyhow::{bail, Result};
 use std::process::Command;
 
+/// Execute the `ssh` command: sync config to remote, then exec ssh with reverse tunnel.
 pub fn run(args: Vec<String>) -> Result<()> {
     if args.is_empty() {
         bail!("zestful ssh requires a host\nUsage: zestful ssh [user@]host [ssh options...]");

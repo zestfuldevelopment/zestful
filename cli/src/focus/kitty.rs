@@ -1,3 +1,8 @@
+//! Kitty terminal focus handler.
+//!
+//! Finds the kitty remote control socket in `/tmp/kitty-sock*` and uses the
+//! `kitten @` CLI to switch tabs or windows.
+
 use anyhow::Result;
 use std::fs;
 
