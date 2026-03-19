@@ -24,7 +24,7 @@ pub async fn focus(tab_id: Option<&str>) -> Result<()> {
 async fn focus_via_api(tab_id: &str) -> Result<()> {
     use iterm2_client::{App, Connection};
 
-    let conn = Connection::connect_unix("zestful-daemon").await?;
+    let conn = Connection::connect("zestful-daemon").await?;
     let app = App::new(conn);
     let sessions = app.list_sessions().await?;
 

@@ -4,7 +4,7 @@
 //! auth token. Applies saved focus context if `--app` is not explicitly passed.
 
 use crate::config;
-use anyhow::{bail, Result};
+use anyhow::Result;
 use serde::Serialize;
 
 #[derive(Serialize)]

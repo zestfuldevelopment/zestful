@@ -555,9 +555,9 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "iterm2-client"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cecd4e0a0957f1f23892b655b463178103abd1f7774b973b02904eda4bee2c2a"
+checksum = "e7c84eea021619d59c301f540c6d4d7395050b94724798bb01307dff6ea1c998"
 dependencies = [
  "futures-util",
  "prost",
