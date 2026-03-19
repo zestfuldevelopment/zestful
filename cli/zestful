@@ -8,6 +8,34 @@ TOKEN_FILE="$HOME/.config/zestful/local-token"
 PORT_FILE="$HOME/.config/zestful/port"
 FOCUS_FILE="$HOME/.config/zestful/focus-context"
 DEFAULT_PORT=21547
+ZESTFULD_PID_FILE="$HOME/.config/zestful/zestfuld.pid"
+ZESTFULD_SCRIPT="$HOME/.config/zestful/zestfuld.js"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Ensure zestfuld is running
+ensure_zestfuld() {
+    if [[ -f "$ZESTFULD_PID_FILE" ]]; then
+        local pid
+        pid=$(cat "$ZESTFULD_PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    # Install zestfuld.js if not present
+    if [[ ! -f "$ZESTFULD_SCRIPT" ]]; then
+        local src="$SCRIPT_DIR/zestfuld.js"
+        if [[ -f "$src" ]]; then
+            mkdir -p "$(dirname "$ZESTFULD_SCRIPT")"
+            cp "$src" "$ZESTFULD_SCRIPT"
+        fi
+    fi
+    if [[ -f "$ZESTFULD_SCRIPT" ]]; then
+        nohup node "$ZESTFULD_SCRIPT" >/dev/null 2>&1 &
+        sleep 0.3
+    fi
+}
+
+ensure_zestfuld
 
 usage() {
     echo "Usage:"
@@ -66,18 +94,26 @@ notify() {
         usage
     fi
 
-    # Read token
-    if [[ ! -f "$TOKEN_FILE" ]]; then
-        echo "Error: Zestful app not running or not configured. Token file not found at $TOKEN_FILE"
+    # Read token (try file first, then sandboxed UserDefaults)
+    local token
+    if [[ -f "$TOKEN_FILE" ]]; then
+        token=$(cat "$TOKEN_FILE")
+    else
+        token=$(defaults read com.caladriuslogic.zestful localServerToken 2>/dev/null || true)
+    fi
+    if [[ -z "$token" ]]; then
+        echo "Error: Zestful app not running or not configured. Token not found."
         exit 2
     fi
-    local token
-    token=$(cat "$TOKEN_FILE")
 
-    # Read port
+    # Read port (try file first, then sandboxed UserDefaults)
     local port=$DEFAULT_PORT
     if [[ -f "$PORT_FILE" ]]; then
         port=$(cat "$PORT_FILE")
+    else
+        local ud_port
+        ud_port=$(defaults read com.caladriuslogic.zestful localServerPort 2>/dev/null || true)
+        [[ -n "$ud_port" ]] && port="$ud_port"
     fi
 
     # Apply saved focus context if --app was not explicitly passed
@@ -165,18 +201,26 @@ zssh() {
         exit 1
     fi
 
-    # Read local token
-    if [[ ! -f "$TOKEN_FILE" ]]; then
-        echo "Error: Zestful app not running. Token file not found at $TOKEN_FILE"
+    # Read local token (try file first, then sandboxed UserDefaults)
+    local token
+    if [[ -f "$TOKEN_FILE" ]]; then
+        token=$(cat "$TOKEN_FILE")
+    else
+        token=$(defaults read com.caladriuslogic.zestful localServerToken 2>/dev/null || true)
+    fi
+    if [[ -z "$token" ]]; then
+        echo "Error: Zestful app not running. Token not found."
         exit 2
     fi
-    local token
-    token=$(cat "$TOKEN_FILE")
 
-    # Read local port
+    # Read local port (try file first, then sandboxed UserDefaults)
     local port=$DEFAULT_PORT
     if [[ -f "$PORT_FILE" ]]; then
         port=$(cat "$PORT_FILE")
+    else
+        local ud_port
+        ud_port=$(defaults read com.caladriuslogic.zestful localServerPort 2>/dev/null || true)
+        [[ -n "$ud_port" ]] && port="$ud_port"
     fi
 
     # Extract the host (first arg that isn't an ssh flag) for scp
