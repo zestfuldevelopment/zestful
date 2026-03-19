@@ -78,7 +78,7 @@ pub fn send(
         push: !no_push,
     };
 
-    let url = format!("http://localhost:{}/notify", port);
+    let url = format!("http://127.0.0.1:{}/notify", port);
     let json = serde_json::to_string(&body)?;
 
     let result = ureq::post(&url)
