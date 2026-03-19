@@ -41,11 +41,17 @@ pub fn run(
     })?;
     let port = config::read_port();
 
-    // Apply saved focus context if --app was not explicitly passed
+    // Apply focus context if --app was not explicitly passed:
+    // 1. Try saved focus-context file
+    // 2. Fall back to auto-detecting the terminal (looks through tmux/screen)
     let (app, window_id, tab_id) = if app.is_none() {
         let ctx = config::read_focus_context();
+        let app = ctx
+            .get("app")
+            .cloned()
+            .or_else(|| config::detect_terminal());
         (
-            ctx.get("app").cloned(),
+            app,
             window_id.or_else(|| ctx.get("window_id").cloned()),
             tab_id.or_else(|| ctx.get("tab_id").cloned()),
         )
