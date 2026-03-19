@@ -92,12 +92,18 @@ pub fn send(
         .header("Content-Type", "application/json")
         .send(json.as_bytes());
 
-    match result {
-        Ok(_) => Ok(()),
-        Err(_) => {
-            bail!("Could not connect to Zestful. Is the app running?");
-        }
+    if let Err(e) = result {
+        // Don't fail — the CLI runs as a hook and a missing Mac app
+        // shouldn't cause noisy errors on every agent stop/start.
+        let reason = match &e {
+            ureq::Error::Io(_) => "connection refused",
+            ureq::Error::Timeout(_) => "timeout",
+            ureq::Error::HostNotFound => "host not found",
+            _ => "request failed",
+        };
+        eprintln!("zestful: could not reach Zestful app ({})", reason);
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -164,14 +170,10 @@ mod tests {
     }
 
     #[test]
-    fn test_send_fails_no_server() {
-        // Trying to connect to a port with no server should fail
+    fn test_send_no_server_returns_ok() {
+        // Connection failure is not an error — CLI runs as a hook
         let result = send("fake-token", 19999, "test", "msg", "info", None, None, None, false);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("Could not connect"));
-        // Error must not leak the token
-        assert!(!err_msg.contains("fake-token"));
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -187,7 +189,7 @@ mod tests {
             Some("tab-1".into()),
             true,
         );
-        assert!(result.is_err()); // no server running
+        assert!(result.is_ok());
     }
 
     #[test]
