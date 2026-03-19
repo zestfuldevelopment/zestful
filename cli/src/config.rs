@@ -128,7 +128,11 @@ pub fn ensure_daemon() {
 
 /// Check if a process is alive using kill(pid, 0).
 fn libc_kill(pid: i32) -> bool {
-    // SAFETY: kill with signal 0 just checks existence, no signal sent
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: kill with signal 0 just checks process existence, no signal is sent.
+    // pid is validated > 0 above, so we won't send to process group 0 or negative groups.
     #[cfg(unix)]
     {
         unsafe { libc::kill(pid, 0) == 0 }
@@ -207,6 +211,17 @@ mod tests {
     #[test]
     fn test_daemon_port() {
         assert_eq!(daemon_port(), 21548);
+    }
+
+    #[test]
+    fn test_libc_kill_rejects_zero_pid() {
+        assert!(!libc_kill(0));
+    }
+
+    #[test]
+    fn test_libc_kill_rejects_negative_pid() {
+        assert!(!libc_kill(-1));
+        assert!(!libc_kill(-999));
     }
 
     #[test]

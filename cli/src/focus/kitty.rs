@@ -54,7 +54,23 @@ fn find_kitty_socket() -> Option<String> {
             let name = entry.file_name();
             let name = name.to_string_lossy();
             if name.starts_with("kitty-sock") {
-                return Some(format!("/tmp/{}", name));
+                let path = entry.path();
+                // Verify it's a socket, not a symlink or regular file
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::FileTypeExt;
+                    if let Ok(meta) = fs::symlink_metadata(&path) {
+                        if meta.file_type().is_symlink() {
+                            continue;
+                        }
+                    }
+                    if let Ok(meta) = fs::metadata(&path) {
+                        if !meta.file_type().is_socket() {
+                            continue;
+                        }
+                    }
+                }
+                return Some(path.to_string_lossy().to_string());
             }
         }
     }

@@ -4,10 +4,44 @@ pub mod kitty;
 pub mod terminal;
 pub mod wezterm;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
+
+/// Validate that a focus identifier (app, window_id, tab_id) contains only
+/// safe characters. Prevents command injection via osascript or CLI args.
+pub fn validate_focus_id(value: &str, field: &str) -> Result<()> {
+    if value.is_empty() {
+        bail!("{} must not be empty", field);
+    }
+    // Allow alphanumeric, spaces, dashes, underscores, dots, colons, slashes
+    // (covers app names like "iTerm2", paths like "/dev/ttys001", IDs like "tab:123")
+    if !value
+        .chars()
+        .all(|c| c.is_alphanumeric() || " -_.:/@".contains(c))
+    {
+        bail!(
+            "{} contains invalid characters: only alphanumeric, spaces, and -_.:/@  are allowed",
+            field
+        );
+    }
+    Ok(())
+}
+
+/// Escape a string for safe embedding in AppleScript double-quoted strings.
+#[cfg(target_os = "macos")]
+fn escape_applescript(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
 
 /// Dispatch focus to the appropriate terminal handler.
 pub async fn handle_focus(app: &str, window_id: Option<&str>, tab_id: Option<&str>) -> Result<()> {
+    validate_focus_id(app, "app")?;
+    if let Some(wid) = window_id {
+        validate_focus_id(wid, "window_id")?;
+    }
+    if let Some(tid) = tab_id {
+        validate_focus_id(tid, "tab_id")?;
+    }
+
     let lower = app.to_lowercase();
 
     if lower.contains("kitty") {
@@ -36,8 +70,9 @@ pub async fn activate_generic(app: &str) -> Result<()> {
     {
         let app = app.to_string();
         tokio::task::spawn_blocking(move || {
+            let escaped = escape_applescript(&app);
             let _ = std::process::Command::new("osascript")
-                .args(["-e", &format!("tell application \"{}\" to activate", app)])
+                .args(["-e", &format!("tell application \"{}\" to activate", escaped)])
                 .output();
         })
         .await?;
@@ -52,8 +87,9 @@ pub async fn activate_generic(app: &str) -> Result<()> {
 /// Activate an app by name via osascript. Used by focus handlers.
 #[cfg(target_os = "macos")]
 pub fn activate_app_sync(app: &str) {
+    let escaped = escape_applescript(app);
     let _ = std::process::Command::new("osascript")
-        .args(["-e", &format!("tell application \"{}\" to activate", app)])
+        .args(["-e", &format!("tell application \"{}\" to activate", escaped)])
         .output();
 }
 
@@ -91,5 +127,51 @@ mod tests {
         // "KITTY" should route to kitty handler
         let result = handle_focus("KITTY", None, None).await;
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_focus_id_accepts_valid() {
+        assert!(validate_focus_id("kitty", "app").is_ok());
+        assert!(validate_focus_id("iTerm2", "app").is_ok());
+        assert!(validate_focus_id("Terminal.app", "app").is_ok());
+        assert!(validate_focus_id("/dev/ttys001", "tab_id").is_ok());
+        assert!(validate_focus_id("my-tab:123", "tab_id").is_ok());
+        assert!(validate_focus_id("42", "window_id").is_ok());
+    }
+
+    #[test]
+    fn test_validate_focus_id_rejects_injection() {
+        // AppleScript injection attempts
+        assert!(validate_focus_id("Finder\"; display dialog \"pwned", "app").is_err());
+        assert!(validate_focus_id("app\nmalicious", "app").is_err());
+        assert!(validate_focus_id("", "app").is_err());
+        assert!(validate_focus_id("tab$(whoami)", "tab_id").is_err());
+        assert!(validate_focus_id("tab`id`", "tab_id").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_handle_focus_rejects_invalid_app() {
+        let result = handle_focus("bad\"app", None, None).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_handle_focus_rejects_invalid_tab_id() {
+        let result = handle_focus("kitty", None, Some("tab$(whoami)")).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_handle_focus_rejects_invalid_window_id() {
+        let result = handle_focus("kitty", Some("win`id`"), None).await;
+        assert!(result.is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_escape_applescript() {
+        assert_eq!(escape_applescript("hello"), "hello");
+        assert_eq!(escape_applescript(r#"say "hi""#), r#"say \"hi\""#);
+        assert_eq!(escape_applescript(r"path\to"), r"path\\to");
     }
 }

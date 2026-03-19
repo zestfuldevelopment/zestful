@@ -20,6 +20,7 @@ pub async fn focus(tab_id: Option<&str>) -> Result<()> {
 #[cfg(target_os = "macos")]
 fn focus_sync(tab_id: Option<&str>) -> Result<()> {
     let script = if let Some(tab_id) = tab_id {
+        let escaped = super::escape_applescript(tab_id);
         format!(
             r#"tell application "Terminal"
   activate
@@ -34,7 +35,7 @@ fn focus_sync(tab_id: Option<&str>) -> Result<()> {
     end repeat
   end repeat
 end tell"#,
-            tab_id
+            escaped
         )
     } else {
         r#"tell application "Terminal" to activate"#.to_string()

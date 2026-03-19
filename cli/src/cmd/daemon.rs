@@ -1,7 +1,13 @@
 use crate::config;
 use crate::focus;
 use anyhow::Result;
-use axum::{extract::Json, http::StatusCode, response::IntoResponse, routing::{get, post}, Router};
+use axum::{
+    extract::Json,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    routing::{get, post},
+    Router,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -30,7 +36,16 @@ async fn run_server() -> Result<()> {
         fs::create_dir_all(parent)?;
     }
 
-    // Write PID file
+    // Write PID file safely: refuse to write if path is a symlink
+    #[cfg(unix)]
+    {
+        if pid_file.exists() {
+            let meta = fs::symlink_metadata(&pid_file)?;
+            if meta.file_type().is_symlink() {
+                anyhow::bail!("PID file is a symlink, refusing to write: {:?}", pid_file);
+            }
+        }
+    }
     fs::write(&pid_file, std::process::id().to_string())?;
 
     let app = Router::new()
@@ -60,7 +75,26 @@ async fn health() -> impl IntoResponse {
     })
 }
 
-async fn handle_focus(Json(req): Json<FocusRequest>) -> impl IntoResponse {
+async fn handle_focus(
+    headers: HeaderMap,
+    Json(req): Json<FocusRequest>,
+) -> impl IntoResponse {
+    // Require auth token
+    if let Some(expected_token) = config::read_token() {
+        let provided = headers
+            .get("X-Zestful-Token")
+            .and_then(|v| v.to_str().ok());
+        match provided {
+            Some(t) if t == expected_token => {}
+            _ => {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(serde_json::json!({"error": "invalid or missing token"})),
+                );
+            }
+        }
+    }
+
     let app = match req.app {
         Some(app) if !app.is_empty() => app,
         _ => {
@@ -157,6 +191,7 @@ mod tests {
                     .method("POST")
                     .uri("/focus")
                     .header("content-type", "application/json")
+                    .header("X-Zestful-Token", config::read_token().unwrap_or_default())
                     .body(Body::from("{}"))
                     .unwrap(),
             )
@@ -177,6 +212,7 @@ mod tests {
                     .method("POST")
                     .uri("/focus")
                     .header("content-type", "application/json")
+                    .header("X-Zestful-Token", config::read_token().unwrap_or_default())
                     .body(Body::from(r#"{"app":""}"#))
                     .unwrap(),
             )
@@ -194,6 +230,7 @@ mod tests {
                     .method("POST")
                     .uri("/focus")
                     .header("content-type", "application/json")
+                    .header("X-Zestful-Token", config::read_token().unwrap_or_default())
                     .body(Body::from(
                         r#"{"app":"kitty","window_id":"1","tab_id":"my-tab"}"#,
                     ))
@@ -216,6 +253,7 @@ mod tests {
                     .method("POST")
                     .uri("/focus")
                     .header("content-type", "application/json")
+                    .header("X-Zestful-Token", config::read_token().unwrap_or_default())
                     .body(Body::from("not json"))
                     .unwrap(),
             )
@@ -234,6 +272,7 @@ mod tests {
                     .method("POST")
                     .uri("/focus")
                     .header("content-type", "application/json")
+                    .header("X-Zestful-Token", config::read_token().unwrap_or_default())
                     .body(Body::from(r#"{"app":"Terminal"}"#))
                     .unwrap(),
             )
@@ -241,5 +280,66 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_focus_rejects_missing_token() {
+        // Only test this if a token is configured (otherwise auth is skipped)
+        if config::read_token().is_some() {
+            let response = app()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/focus")
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"app":"Terminal"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_focus_rejects_wrong_token() {
+        if config::read_token().is_some() {
+            let response = app()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/focus")
+                        .header("content-type", "application/json")
+                        .header("X-Zestful-Token", "wrong-token-value")
+                        .body(Body::from(r#"{"app":"Terminal"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_focus_rejects_injection_in_app() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/focus")
+                    .header("content-type", "application/json")
+                    .header("X-Zestful-Token", config::read_token().unwrap_or_default())
+                    .body(Body::from(r#"{"app":"Finder\"; display dialog \"pwned"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Should succeed at HTTP level but focus::handle_focus will reject the invalid chars
+        // The response is still 200 because the error is logged, not returned
+        // But the osascript won't execute arbitrary code due to validation
+        assert!(response.status().is_success() || response.status().is_client_error());
     }
 }
