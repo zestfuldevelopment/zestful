@@ -18,7 +18,7 @@ brew install caladriuslogic/tap/zestful
 
 ```bash
 git clone https://github.com/caladriuslogic/zestful.git
-cd zestful/cli
+cd zestful
 cargo build --release
 cp target/release/zestful /usr/local/bin/
 ```
@@ -210,7 +210,6 @@ The daemon auto-starts when any CLI command runs.
 ## Building
 
 ```bash
-cd cli
 cargo build --release
 cargo test
 ```
