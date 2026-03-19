@@ -68,6 +68,12 @@ enum Commands {
         args: Vec<String>,
     },
 
+    /// Set the terminal tab title (for click-to-focus matching)
+    Title {
+        /// Tab title to set (defaults to current directory name)
+        name: Option<String>,
+    },
+
     /// Start the focus daemon (usually auto-started)
     Daemon,
 }
@@ -75,8 +81,8 @@ enum Commands {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // Auto-start daemon for commands that might need it (not daemon itself)
-    if !matches!(cli.command, Commands::Daemon) {
+    // Auto-start daemon for commands that might need it (not daemon/title)
+    if !matches!(cli.command, Commands::Daemon | Commands::Title { .. }) {
         config::ensure_daemon();
     }
 
@@ -94,6 +100,8 @@ fn main() -> anyhow::Result<()> {
         Commands::Watch { agent, command } => cmd::watch::run(agent, command),
 
         Commands::Ssh { args } => cmd::ssh::run(args),
+
+        Commands::Title { name } => cmd::title::run(name),
 
         Commands::Daemon => cmd::daemon::run(),
     }
