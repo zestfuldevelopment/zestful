@@ -49,10 +49,10 @@ zestful notify --agent <name> --message <msg> [options]
 | `--agent` | Yes | Agent name (e.g. `claude-code`, `cursor`) |
 | `--message` | Yes | Message to display |
 | `--severity` | No | `info`, `warning` (default), or `urgent` |
-| `--app` | No | App to focus when alert is clicked |
-| `--window-id` | No | Window ID for focus |
-| `--tab-id` | No | Tab ID for focus |
+| `--terminal-uri` | No | Terminal URI for focus (auto-detected) |
 | `--no-push` | No | Suppress push notification for this event |
+
+Click-to-focus is automatic — [`terminal-inspector`](https://crates.io/crates/terminal-inspector) detects your terminal, window, tab, and multiplexer session. No flags needed.
 
 ### `zestful watch`
 
@@ -64,7 +64,7 @@ zestful watch cargo test --release  # notifies on success or failure
 zestful watch --agent deploy ./deploy.sh
 ```
 
-Exit 0 → `warning` ("done"). Non-zero → `urgent` ("failed"). Auto-detects `$TERM_PROGRAM` for click-to-focus.
+Exit 0 sends `warning` ("done"). Non-zero sends `urgent` ("failed").
 
 ### `zestful ssh`
 
@@ -75,7 +75,7 @@ zestful ssh dev@myserver.com
 zestful ssh dev@myserver.com -p 2222 -i ~/.ssh/mykey
 ```
 
-This copies your auth token, port, and focus context (terminal app + window/tab ID) to the remote, sets up a reverse port forward, and opens an SSH session. On the remote, `zestful notify` and `zestful watch` work as if you were local — including click-to-focus back to the correct Kitty/iTerm2 tab on your Mac.
+This copies your auth token, port, and terminal URI to the remote, sets up a reverse port forward, and opens an SSH session. On the remote, `zestful notify` and `zestful watch` work as if you were local — including click-to-focus back to the correct terminal tab on your Mac.
 
 **Manual setup** (for existing scripts or `.ssh/config`):
 
@@ -90,10 +90,6 @@ ssh -R 21547:localhost:21547 dev@myserver.com
 ### `zestful daemon`
 
 Starts the focus daemon on `localhost:21548`. The daemon handles terminal tab switching when you click a notification in the Zestful app. It is auto-started by other commands — you rarely need to run this manually.
-
-The daemon provides:
-- `GET /health` — health check
-- `POST /focus` — switch to a terminal tab (requires `X-Zestful-Token` header)
 
 ### Severity Levels
 
@@ -116,10 +112,10 @@ Add to `.claude/settings.json` (or copy `hooks/claude-code.json`):
       "matcher": "",
       "hooks": [{
         "type": "command",
-        "command": "zestful notify --agent \"claude-code:$(basename $PWD)\" --message 'Waiting for your input' --app \"$TERM_PROGRAM\" ${KITTY_WINDOW_ID:+--window-id \"$KITTY_WINDOW_ID\"}"
+        "command": "zestful notify --agent \"claude-code:$(basename $PWD)\" --message 'Waiting for your input'"
       }]
     }],
-    "Start": [{
+    "UserPromptSubmit": [{
       "matcher": "",
       "hooks": [{
         "type": "command",
@@ -135,7 +131,7 @@ Add to `.claude/settings.json` (or copy `hooks/claude-code.json`):
 One-liner — no config file needed:
 
 ```bash
-aider --notifications-command 'zestful notify --agent "aider:$(basename $PWD)" --message "$AIDER_NOTIFICATION_TITLE" --app "$TERM_PROGRAM"'
+aider --notifications-command 'zestful notify --agent "aider:$(basename $PWD)" --message "$AIDER_NOTIFICATION_TITLE"'
 ```
 
 ### Cursor
@@ -145,7 +141,7 @@ Place `.cursor/hooks.json` in your project root (beta):
 ```json
 {
   "hooks": [
-    { "event": "stop", "command": "zestful notify --agent \"cursor:$(basename $PWD)\" --message 'Waiting for your input' --app Cursor" },
+    { "event": "stop", "command": "zestful notify --agent \"cursor:$(basename $PWD)\" --message 'Waiting for your input'" },
     { "event": "start", "command": "zestful notify --agent \"cursor:$(basename $PWD)\" --message 'Working...' --severity info" }
   ]
 }
@@ -171,30 +167,20 @@ zestful notify --agent "deploy" --message "Deploy needs approval" --severity war
 zestful notify --agent "ci" --message "Build failed!" --severity urgent
 ```
 
-## Click-to-Foreground
-
-Pass `--app` to bring the agent's terminal to the front when you click the alert:
-
-```bash
-zestful notify --agent "test" --message "waiting" --app "$TERM_PROGRAM"
-```
-
-Works with Kitty, iTerm2, WezTerm, Terminal.app (tab-level), and VS Code, Cursor, Alacritty, Ghostty, Warp, Hyper (window-level) via AppleScript.
-
 ## Architecture
 
 The `zestful` binary serves two roles:
 
 - **CLI mode** (`notify`, `watch`, `ssh`) — synchronous commands that send HTTP requests to the Zestful Mac app on `localhost:21547`. No async runtime needed.
-- **Daemon mode** (`daemon`) — an async [axum](https://github.com/tokio-rs/axum) server on `localhost:21548` that handles terminal focus switching. Uses the [iterm2-client](https://crates.io/crates/iterm2-client) crate for native iTerm2 tab switching (no Python dependency).
+- **Daemon mode** (`daemon`) — an async [axum](https://github.com/tokio-rs/axum) server on `localhost:21548` that handles terminal focus switching. Uses the [iterm2-client](https://crates.io/crates/iterm2-client) crate for native iTerm2 tab switching and [terminal-inspector](https://crates.io/crates/terminal-inspector) for automatic terminal detection.
 
 ```
 Agent hook fires
-    → zestful notify (HTTP POST to Mac app on :21547)
-    → Mac app shows overlay, optional push to iPhone
-    → User clicks alert
-    → Mac app POSTs to zestful daemon on :21548
-    → Daemon switches to correct terminal tab
+    -> zestful notify (auto-captures terminal URI, POSTs to Mac app on :21547)
+    -> Mac app shows overlay, optional push to iPhone
+    -> User clicks alert
+    -> Mac app POSTs terminal URI to zestful daemon on :21548
+    -> Daemon parses URI, switches to correct terminal tab
 ```
 
 The daemon auto-starts when any CLI command runs.
@@ -203,9 +189,10 @@ The daemon auto-starts when any CLI command runs.
 
 1. The Zestful Mac app runs a local HTTP server on `localhost:21547`
 2. The CLI sends notifications via HTTP POST with an auth token
-3. The app shows them in the floating overlay and menu bar
-4. If logged in, alerts forward as push notifications to your iPhone
-5. Click any alert to focus the agent's window via the focus daemon
+3. `terminal-inspector::locate()` auto-captures a `terminal://` URI identifying the exact terminal/tab/pane
+4. The app shows alerts in the floating overlay and menu bar
+5. If logged in, alerts forward as push notifications to your iPhone
+6. Click any alert to focus the agent's terminal via the focus daemon
 
 ## Building
 
