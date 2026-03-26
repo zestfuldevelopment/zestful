@@ -100,9 +100,9 @@ async fn handle_focus(
     // the original Node.js daemon behavior.
 
     // Prefer terminal_uri; fall back to legacy app/window_id/tab_id fields
-    let (app, window_id, tab_id) = if let Some(ref uri) = req.terminal_uri {
+    let parsed = if let Some(ref uri) = req.terminal_uri {
         match focus::parse_terminal_uri(uri) {
-            Some(parsed) => (parsed.app, parsed.window_id, parsed.tab_id),
+            Some(p) => p,
             None => {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -112,7 +112,12 @@ async fn handle_focus(
         }
     } else {
         match req.app {
-            Some(app) if !app.is_empty() => (app, req.window_id, req.tab_id),
+            Some(app) if !app.is_empty() => focus::ParsedTerminalUri {
+                app,
+                window_id: req.window_id,
+                tab_id: req.tab_id,
+                shelldon: None,
+            },
             _ => {
                 return (
                     StatusCode::BAD_REQUEST,
@@ -123,21 +128,30 @@ async fn handle_focus(
     };
 
     eprintln!(
-        "[zestfuld] Focus: app={} window_id={} tab_id={} uri={}",
-        app,
-        window_id.as_deref().unwrap_or(""),
-        tab_id.as_deref().unwrap_or(""),
+        "[zestfuld] Focus: app={} window_id={} tab_id={} shelldon={} uri={}",
+        parsed.app,
+        parsed.window_id.as_deref().unwrap_or(""),
+        parsed.tab_id.as_deref().unwrap_or(""),
+        parsed.shelldon.as_ref().map(|s| s.session_id.as_str()).unwrap_or(""),
         req.terminal_uri.as_deref().unwrap_or("")
     );
 
+    // Focus the terminal emulator tab
     if let Err(e) = focus::handle_focus(
-        &app,
-        window_id.as_deref(),
-        tab_id.as_deref(),
+        &parsed.app,
+        parsed.window_id.as_deref(),
+        parsed.tab_id.as_deref(),
     )
     .await
     {
         eprintln!("[zestfuld] Focus error: {}", e);
+    }
+
+    // Focus the shelldon tab within the terminal
+    if let Some(ref shelldon) = parsed.shelldon {
+        if let Err(e) = focus::shelldon::focus(shelldon).await {
+            eprintln!("[zestfuld] Shelldon focus error: {}", e);
+        }
     }
 
     (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))

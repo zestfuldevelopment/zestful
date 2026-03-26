@@ -7,25 +7,35 @@
 #[cfg(target_os = "macos")]
 pub mod iterm2;
 pub mod kitty;
+pub mod shelldon;
 pub mod terminal;
 pub mod wezterm;
 
 use anyhow::{bail, Result};
+
+/// Parsed shelldon multiplexer info from the URI.
+pub struct ShelldonInfo {
+    pub session_id: String,
+    pub tab_id: Option<String>,
+}
 
 /// Parsed terminal URI components.
 pub struct ParsedTerminalUri {
     pub app: String,
     pub window_id: Option<String>,
     pub tab_id: Option<String>,
+    pub shelldon: Option<ShelldonInfo>,
 }
 
-/// Parse a `terminal://` URI into app name and IDs for focus dispatch.
+/// Parse a `workspace://` or `terminal://` URI into app name and IDs for focus dispatch.
 ///
-/// URI format: `terminal://iterm2/window:1229/tab:3/tmux:main/window:1/pane:0`
-/// Extracts the terminal emulator name and its window/tab IDs (before any
-/// multiplexer segments).
+/// URI format: `workspace://iterm2/window:1229/tab:3/shelldon:session-id/tab:0`
+/// Extracts the terminal emulator name, its window/tab IDs, and any
+/// multiplexer info (shelldon session + tab).
 pub fn parse_terminal_uri(uri: &str) -> Option<ParsedTerminalUri> {
-    let rest = uri.strip_prefix("terminal://")?;
+    let rest = uri
+        .strip_prefix("workspace://")
+        .or_else(|| uri.strip_prefix("terminal://"))?;
     let parts: Vec<&str> = rest.split('/').collect();
     let raw_app = parts.first()?;
     if raw_app.is_empty() {
@@ -34,20 +44,43 @@ pub fn parse_terminal_uri(uri: &str) -> Option<ParsedTerminalUri> {
 
     let mut window_id = None;
     let mut tab_id = None;
+    let mut shelldon = None;
+
+    let mut in_shelldon = false;
+    let mut shelldon_session_id = String::new();
+    let mut shelldon_tab_id = None;
 
     for part in &parts[1..] {
-        // Stop at multiplexer segments — those are inside the terminal
-        if part.starts_with("tmux:")
-            || part.starts_with("zellij:")
-            || part.starts_with("shelldon:")
-        {
+        if in_shelldon {
+            if let Some(id) = part.strip_prefix("tab:") {
+                shelldon_tab_id = Some(id.to_string());
+            }
+            continue;
+        }
+
+        if let Some(session) = part.strip_prefix("shelldon:") {
+            in_shelldon = true;
+            shelldon_session_id = session.to_string();
+            continue;
+        }
+
+        // Stop at other multiplexer segments
+        if part.starts_with("tmux:") || part.starts_with("zellij:") {
             break;
         }
+
         if let Some(id) = part.strip_prefix("window:") {
             window_id = Some(id.to_string());
         } else if let Some(id) = part.strip_prefix("tab:") {
             tab_id = Some(id.to_string());
         }
+    }
+
+    if in_shelldon {
+        shelldon = Some(ShelldonInfo {
+            session_id: shelldon_session_id,
+            tab_id: shelldon_tab_id,
+        });
     }
 
     let app = match *raw_app {
@@ -62,6 +95,7 @@ pub fn parse_terminal_uri(uri: &str) -> Option<ParsedTerminalUri> {
         app,
         window_id,
         tab_id,
+        shelldon,
     })
 }
 
@@ -190,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_parse_terminal_uri_iterm2() {
-        let parsed = parse_terminal_uri("terminal://iterm2/window:1229/tab:3").unwrap();
+        let parsed = parse_terminal_uri("workspace://iterm2/window:1229/tab:3").unwrap();
         assert_eq!(parsed.app, "iTerm2");
         assert_eq!(parsed.window_id.as_deref(), Some("1229"));
         assert_eq!(parsed.tab_id.as_deref(), Some("3"));
@@ -199,17 +233,42 @@ mod tests {
     #[test]
     fn test_parse_terminal_uri_with_tmux() {
         let parsed =
-            parse_terminal_uri("terminal://iterm2/window:1229/tab:3/tmux:main/window:1/pane:0")
+            parse_terminal_uri("workspace://iterm2/window:1229/tab:3/tmux:main/window:1/pane:0")
                 .unwrap();
         assert_eq!(parsed.app, "iTerm2");
-        // Should capture terminal-level window/tab, not tmux-level
         assert_eq!(parsed.window_id.as_deref(), Some("1229"));
         assert_eq!(parsed.tab_id.as_deref(), Some("3"));
+        assert!(parsed.shelldon.is_none());
+    }
+
+    #[test]
+    fn test_parse_terminal_uri_with_shelldon() {
+        let parsed = parse_terminal_uri(
+            "workspace://iterm2/window:26411/tab:1/shelldon:shelldon-28647-56756/tab:0",
+        )
+        .unwrap();
+        assert_eq!(parsed.app, "iTerm2");
+        assert_eq!(parsed.window_id.as_deref(), Some("26411"));
+        assert_eq!(parsed.tab_id.as_deref(), Some("1"));
+        let shelldon = parsed.shelldon.as_ref().unwrap();
+        assert_eq!(shelldon.session_id, "shelldon-28647-56756");
+        assert_eq!(shelldon.tab_id.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn test_parse_terminal_uri_shelldon_no_tab() {
+        let parsed = parse_terminal_uri(
+            "workspace://iterm2/window:26411/tab:1/shelldon:shelldon-28647-56756",
+        )
+        .unwrap();
+        let shelldon = parsed.shelldon.as_ref().unwrap();
+        assert_eq!(shelldon.session_id, "shelldon-28647-56756");
+        assert!(shelldon.tab_id.is_none());
     }
 
     #[test]
     fn test_parse_terminal_uri_kitty() {
-        let parsed = parse_terminal_uri("terminal://kitty/window:42/tab:7").unwrap();
+        let parsed = parse_terminal_uri("workspace://kitty/window:42/tab:7").unwrap();
         assert_eq!(parsed.app, "kitty");
         assert_eq!(parsed.window_id.as_deref(), Some("42"));
         assert_eq!(parsed.tab_id.as_deref(), Some("7"));
@@ -217,22 +276,29 @@ mod tests {
 
     #[test]
     fn test_parse_terminal_uri_no_ids() {
-        let parsed = parse_terminal_uri("terminal://wezterm").unwrap();
+        let parsed = parse_terminal_uri("workspace://wezterm").unwrap();
         assert_eq!(parsed.app, "WezTerm");
         assert!(parsed.window_id.is_none());
         assert!(parsed.tab_id.is_none());
     }
 
     #[test]
+    fn test_parse_terminal_uri_legacy_scheme() {
+        let parsed = parse_terminal_uri("terminal://kitty/window:1/tab:2").unwrap();
+        assert_eq!(parsed.app, "kitty");
+        assert_eq!(parsed.tab_id.as_deref(), Some("2"));
+    }
+
+    #[test]
     fn test_parse_terminal_uri_invalid() {
         assert!(parse_terminal_uri("not-a-uri").is_none());
-        assert!(parse_terminal_uri("terminal://").is_none());
+        assert!(parse_terminal_uri("workspace://").is_none());
         assert!(parse_terminal_uri("http://iterm2/window:1").is_none());
     }
 
     #[test]
     fn test_parse_terminal_uri_apple_terminal() {
-        let parsed = parse_terminal_uri("terminal://apple_terminal/window:1").unwrap();
+        let parsed = parse_terminal_uri("workspace://apple_terminal/window:1").unwrap();
         assert_eq!(parsed.app, "Terminal");
     }
 

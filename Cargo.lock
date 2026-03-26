@@ -1090,18 +1090,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "terminal-inspector"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f9d5a2ce961728018990525614109406f0952ba39c94134096823f014ff92f2"
-dependencies = [
- "anyhow",
- "clap",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "thiserror"
 version = "2.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1540,6 +1528,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "workspace-inspector"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0054d561dd4fd15253d8cf6dc6b5957c2abe467f7b28fde6733412cd1c11adbb"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "zerocopy"
 version = "0.8.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1591,10 +1591,10 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "terminal-inspector",
  "tokio",
  "tower",
  "ureq",
+ "workspace-inspector",
 ]
 
 [[package]]
