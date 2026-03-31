@@ -78,6 +78,8 @@ pub fn send(
     let url = format!("http://127.0.0.1:{}/notify", port);
     let json = serde_json::to_string(&body)?;
 
+    crate::log::log("notify", &format!("sending {} bytes to {}", json.len(), url));
+
     let result = ureq::post(&url)
         .header("X-Zestful-Token", token)
         .header("Content-Type", "application/json")
