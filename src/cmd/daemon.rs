@@ -72,7 +72,7 @@ async fn run_server() -> Result<()> {
     let port = config::daemon_port();
     let addr = format!("127.0.0.1:{}", port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-    eprintln!("[zestfuld] Listening on localhost:{}", port);
+    crate::log::log("daemon", &format!("listening on localhost:{}", port));
 
     // Graceful shutdown on SIGTERM/SIGINT
     let pid_file_clone = pid_file.clone();
@@ -127,14 +127,14 @@ async fn handle_focus(
         }
     };
 
-    eprintln!(
-        "[zestfuld] Focus: app={} window_id={} tab_id={} shelldon={} uri={}",
+    crate::log::log("daemon", &format!(
+        "focus: app={} window_id={} tab_id={} shelldon={} uri={}",
         parsed.app,
         parsed.window_id.as_deref().unwrap_or(""),
         parsed.tab_id.as_deref().unwrap_or(""),
         parsed.shelldon.as_ref().map(|s| s.session_id.as_str()).unwrap_or(""),
         req.terminal_uri.as_deref().unwrap_or("")
-    );
+    ));
 
     // Focus the terminal emulator tab
     if let Err(e) = focus::handle_focus(
@@ -144,13 +144,13 @@ async fn handle_focus(
     )
     .await
     {
-        eprintln!("[zestfuld] Focus error: {}", e);
+        crate::log::log("daemon", &format!("focus error: {}", e));
     }
 
     // Focus the shelldon tab within the terminal
     if let Some(ref shelldon) = parsed.shelldon {
         if let Err(e) = focus::shelldon::focus(shelldon).await {
-            eprintln!("[zestfuld] Shelldon focus error: {}", e);
+            crate::log::log("daemon", &format!("shelldon focus error: {}", e));
         }
     }
 
@@ -180,7 +180,7 @@ async fn shutdown_signal(pid_file: std::path::PathBuf) {
         _ = terminate => {},
     }
 
-    eprintln!("[zestfuld] Shutting down...");
+    crate::log::log("daemon", "shutting down");
     let _ = fs::remove_file(&pid_file);
 }
 

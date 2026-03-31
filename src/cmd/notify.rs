@@ -43,6 +43,13 @@ pub fn run(
         .or_else(|| terminal_inspector::locate().ok())
         .or_else(|| config::read_terminal_uri());
 
+    crate::log::log("notify", &format!(
+        "agent={} severity={} uri={} push={}",
+        agent, severity,
+        terminal_uri.as_deref().unwrap_or("none"),
+        !no_push
+    ));
+
     if debug {
         eprintln!("zestful: uri={}", terminal_uri.as_deref().unwrap_or("none"));
     }
@@ -79,7 +86,7 @@ pub fn send(
     match result {
         Ok(_) => {}
         Err(ureq::Error::StatusCode(code)) => {
-            eprintln!("zestful: Zestful app returned HTTP {}", code);
+            crate::log::log("notify", &format!("app returned HTTP {}", code));
         }
         Err(e) => {
             let reason = match &e {
@@ -88,7 +95,7 @@ pub fn send(
                 ureq::Error::HostNotFound => "host not found",
                 _ => "request failed",
             };
-            eprintln!("zestful: could not reach Zestful app ({})", reason);
+            crate::log::log("notify", &format!("could not reach app ({})", reason));
         }
     }
     Ok(())

@@ -13,7 +13,7 @@ use anyhow::Result;
 pub async fn focus(window_id: Option<&str>, tab_id: Option<&str>) -> Result<()> {
     if tab_id.is_some() {
         if let Err(e) = focus_via_api(tab_id).await {
-            eprintln!("[zestfuld] iTerm2 API error (falling back to AppleScript): {}", e);
+            crate::log::log("daemon", &format!("iTerm2 API error (falling back to AppleScript): {}", e));
         }
     }
 

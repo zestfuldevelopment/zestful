@@ -73,10 +73,7 @@ fn focus_sync(session_id: &str, tab_id: &str) -> Result<()> {
     let mut response = Vec::new();
     stream.read_to_end(&mut response)?;
 
-    eprintln!(
-        "[zestfuld] Shelldon focus_tab({}) on port {} — ok",
-        tab_id, port
-    );
+    crate::log::log("daemon", &format!("shelldon focus_tab({}) on port {} — ok", tab_id, port));
 
     Ok(())
 }

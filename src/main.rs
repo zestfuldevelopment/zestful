@@ -7,6 +7,7 @@
 mod cmd;
 mod config;
 mod focus;
+pub mod log;
 
 use clap::{Parser, Subcommand};
 

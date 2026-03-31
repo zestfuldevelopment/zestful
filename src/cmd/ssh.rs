@@ -24,8 +24,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
     // Capture terminal URI for click-to-focus on the remote side
     let terminal_uri = terminal_inspector::locate().ok();
 
-    // Sync config to remote
-    eprintln!("Syncing Zestful config to {}...", dest);
+    crate::log::log("ssh", &format!("connecting to {} uri={}", dest, terminal_uri.as_deref().unwrap_or("none")));
 
     // Create remote config dir
     run_ssh(dest, "mkdir -p ~/.config/zestful && chmod 700 ~/.config/zestful")?;
@@ -53,7 +52,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
         )?;
     }
 
-    eprintln!("Connecting with Zestful forwarding (port {})...", port);
+    crate::log::log("ssh", &format!("forwarding port {} to {}", port, dest));
 
     // exec ssh with reverse port forward
     #[cfg(unix)]

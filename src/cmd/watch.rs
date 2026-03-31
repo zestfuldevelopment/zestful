@@ -22,6 +22,8 @@ pub fn run(agent: String, command: Vec<String>) -> Result<()> {
     // Capture terminal URI before running the command (environment is stable now)
     let terminal_uri = terminal_inspector::locate().ok();
 
+    crate::log::log("watch", &format!("running: {}", command.join(" ")));
+
     // Run the command
     let status = Command::new(&command[0])
         .args(&command[1..])
@@ -30,7 +32,7 @@ pub fn run(agent: String, command: Vec<String>) -> Result<()> {
     let exit_code = match status {
         Ok(s) => s.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("Failed to run '{}': {}", command[0], e);
+            crate::log::log("watch", &format!("failed to run '{}': {}", command[0], e));
             127
         }
     };
@@ -48,6 +50,7 @@ pub fn run(agent: String, command: Vec<String>) -> Result<()> {
         ("urgent", format!("{} failed (exit {})", cmd_name, exit_code))
     };
 
+    crate::log::log("watch", &format!("exit={} severity={} agent={}", exit_code, severity, agent_name));
     let _ = notify::send(&token, port, &agent_name, &message, severity, terminal_uri, false);
 
     std::process::exit(exit_code);
