@@ -27,6 +27,7 @@ pub fn run(
             window_id,
             tab_id,
             shelldon: None,
+            tmux: None,
         }
     } else {
         bail!("provide a URI positional arg or --app\n\nUsage:\n  zestful focus workspace://iterm2/window:1/tab:2\n  zestful focus --app iTerm2 --tab-id 3");
@@ -49,6 +50,13 @@ pub fn run(
             if let Err(e) = multiplexers::shelldon::focus(shelldon).await {
                 crate::log::log("focus", &format!("shelldon focus error: {}", e));
                 eprintln!("zestful: shelldon focus error: {}", e);
+            }
+        }
+
+        if let Some(ref tmux) = parsed.tmux {
+            if let Err(e) = multiplexers::tmux::focus(tmux).await {
+                crate::log::log("focus", &format!("tmux focus error: {}", e));
+                eprintln!("zestful: tmux focus error: {}", e);
             }
         }
     });

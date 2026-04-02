@@ -1,9 +1,10 @@
-//! tmux session detection.
+//! tmux session detection and focus.
 
 use anyhow::Result;
 use std::process::Command;
 
 use crate::workspace::types::{TmuxPane, TmuxSession, TmuxWindow};
+use crate::workspace::uri::{self, TmuxInfo};
 
 pub fn detect() -> Result<Vec<TmuxSession>> {
     let has_tmux = Command::new("which")
@@ -129,4 +130,118 @@ fn list_panes(target: &str) -> Result<Vec<TmuxPane>> {
     }
 
     Ok(panes)
+}
+
+/// Focus a tmux window and/or pane by session name.
+pub async fn focus(info: &TmuxInfo) -> Result<()> {
+    uri::validate_focus_id(&info.session, "tmux session")?;
+    if let Some(ref w) = info.window {
+        uri::validate_focus_id(w, "tmux window")?;
+    }
+    if let Some(ref p) = info.pane {
+        uri::validate_focus_id(p, "tmux pane")?;
+    }
+
+    let session = info.session.clone();
+    let window = info.window.clone();
+    let pane = info.pane.clone();
+
+    tokio::task::spawn_blocking(move || focus_sync(&session, window.as_deref(), pane.as_deref()))
+        .await??;
+
+    Ok(())
+}
+
+fn focus_sync(session: &str, window: Option<&str>, pane: Option<&str>) -> Result<()> {
+    if let Some(win) = window {
+        let target = format!("{}:{}", session, win);
+        let output = Command::new("tmux")
+            .args(["select-window", "-t", &target])
+            .output();
+        if let Ok(ref o) = output {
+            if !o.status.success() {
+                crate::log::log("tmux", &format!(
+                    "select-window -t {} failed: {}",
+                    target,
+                    String::from_utf8_lossy(&o.stderr).trim()
+                ));
+            }
+        }
+
+        if let Some(pane_idx) = pane {
+            let pane_target = format!("{}.{}", target, pane_idx);
+            let output = Command::new("tmux")
+                .args(["select-pane", "-t", &pane_target])
+                .output();
+            if let Ok(ref o) = output {
+                if !o.status.success() {
+                    crate::log::log("tmux", &format!(
+                        "select-pane -t {} failed: {}",
+                        pane_target,
+                        String::from_utf8_lossy(&o.stderr).trim()
+                    ));
+                }
+            }
+        }
+    }
+
+    crate::log::log("tmux", &format!(
+        "focus session={} window={} pane={}",
+        session,
+        window.unwrap_or(""),
+        pane.unwrap_or("")
+    ));
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_focus_no_window() {
+        // No window means nothing to select — should succeed silently
+        let info = TmuxInfo {
+            session: "main".into(),
+            window: None,
+            pane: None,
+        };
+        let result = focus(&info).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_focus_rejects_invalid_session() {
+        let info = TmuxInfo {
+            session: "bad\"session".into(),
+            window: Some("0".into()),
+            pane: None,
+        };
+        let result = focus(&info).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_focus_rejects_invalid_window() {
+        let info = TmuxInfo {
+            session: "main".into(),
+            window: Some("$(whoami)".into()),
+            pane: None,
+        };
+        let result = focus(&info).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_focus_with_window_and_pane() {
+        // tmux may not be running — should not panic
+        let info = TmuxInfo {
+            session: "main".into(),
+            window: Some("0".into()),
+            pane: Some("0".into()),
+        };
+        let result = focus(&info).await;
+        assert!(result.is_ok());
+    }
 }

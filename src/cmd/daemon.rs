@@ -117,6 +117,7 @@ async fn handle_focus(
                 window_id: req.window_id,
                 tab_id: req.tab_id,
                 shelldon: None,
+                tmux: None,
             },
             _ => {
                 return (
@@ -128,11 +129,12 @@ async fn handle_focus(
     };
 
     crate::log::log("daemon", &format!(
-        "focus: app={} window_id={} tab_id={} shelldon={} uri={}",
+        "focus: app={} window_id={} tab_id={} shelldon={} tmux={} uri={}",
         parsed.app,
         parsed.window_id.as_deref().unwrap_or(""),
         parsed.tab_id.as_deref().unwrap_or(""),
         parsed.shelldon.as_ref().map(|s| s.session_id.as_str()).unwrap_or(""),
+        parsed.tmux.as_ref().map(|t| t.session.as_str()).unwrap_or(""),
         req.terminal_uri.as_deref().unwrap_or("")
     ));
 
@@ -151,6 +153,13 @@ async fn handle_focus(
     if let Some(ref shelldon) = parsed.shelldon {
         if let Err(e) = crate::workspace::multiplexers::shelldon::focus(shelldon).await {
             crate::log::log("daemon", &format!("shelldon focus error: {}", e));
+        }
+    }
+
+    // Focus the tmux window/pane within the terminal
+    if let Some(ref tmux) = parsed.tmux {
+        if let Err(e) = crate::workspace::multiplexers::tmux::focus(tmux).await {
+            crate::log::log("daemon", &format!("tmux focus error: {}", e));
         }
     }
 

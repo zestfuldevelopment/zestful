@@ -8,12 +8,20 @@ pub struct ShelldonInfo {
     pub tab_id: Option<String>,
 }
 
+/// Parsed tmux multiplexer info from the URI.
+pub struct TmuxInfo {
+    pub session: String,
+    pub window: Option<String>,
+    pub pane: Option<String>,
+}
+
 /// Parsed terminal URI components.
 pub struct ParsedTerminalUri {
     pub app: String,
     pub window_id: Option<String>,
     pub tab_id: Option<String>,
     pub shelldon: Option<ShelldonInfo>,
+    pub tmux: Option<TmuxInfo>,
 }
 
 /// Parse a `workspace://` or `terminal://` URI into app name and IDs for focus dispatch.
@@ -37,10 +45,24 @@ pub fn parse_terminal_uri(uri: &str) -> Option<ParsedTerminalUri> {
     let mut shelldon_session_id = String::new();
     let mut shelldon_tab_id = None;
 
+    let mut in_tmux = false;
+    let mut tmux_session = String::new();
+    let mut tmux_window = None;
+    let mut tmux_pane = None;
+
     for part in &parts[1..] {
         if in_shelldon {
             if let Some(id) = part.strip_prefix("tab:") {
                 shelldon_tab_id = Some(id.to_string());
+            }
+            continue;
+        }
+
+        if in_tmux {
+            if let Some(id) = part.strip_prefix("window:") {
+                tmux_window = Some(id.to_string());
+            } else if let Some(id) = part.strip_prefix("pane:") {
+                tmux_pane = Some(id.to_string());
             }
             continue;
         }
@@ -51,8 +73,14 @@ pub fn parse_terminal_uri(uri: &str) -> Option<ParsedTerminalUri> {
             continue;
         }
 
+        if let Some(session) = part.strip_prefix("tmux:") {
+            in_tmux = true;
+            tmux_session = session.to_string();
+            continue;
+        }
+
         // Stop at other multiplexer segments
-        if part.starts_with("tmux:") || part.starts_with("zellij:") {
+        if part.starts_with("zellij:") {
             break;
         }
 
@@ -70,6 +98,16 @@ pub fn parse_terminal_uri(uri: &str) -> Option<ParsedTerminalUri> {
         });
     }
 
+    let tmux = if in_tmux {
+        Some(TmuxInfo {
+            session: tmux_session,
+            window: tmux_window,
+            pane: tmux_pane,
+        })
+    } else {
+        None
+    };
+
     let app = match *raw_app {
         "cmd" => "Cmd".to_string(),
         "iterm2" => "iTerm2".to_string(),
@@ -85,6 +123,7 @@ pub fn parse_terminal_uri(uri: &str) -> Option<ParsedTerminalUri> {
         window_id,
         tab_id,
         shelldon,
+        tmux,
     })
 }
 
@@ -159,6 +198,38 @@ mod tests {
         assert_eq!(parsed.window_id.as_deref(), Some("1229"));
         assert_eq!(parsed.tab_id.as_deref(), Some("3"));
         assert!(parsed.shelldon.is_none());
+        let tmux = parsed.tmux.as_ref().unwrap();
+        assert_eq!(tmux.session, "main");
+        assert_eq!(tmux.window.as_deref(), Some("1"));
+        assert_eq!(tmux.pane.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn test_parse_terminal_uri_tmux_session_only() {
+        let parsed =
+            parse_terminal_uri("workspace://iterm2/window:1/tab:1/tmux:dev")
+                .unwrap();
+        let tmux = parsed.tmux.as_ref().unwrap();
+        assert_eq!(tmux.session, "dev");
+        assert!(tmux.window.is_none());
+        assert!(tmux.pane.is_none());
+    }
+
+    #[test]
+    fn test_parse_terminal_uri_tmux_window_no_pane() {
+        let parsed =
+            parse_terminal_uri("workspace://iterm2/window:1/tab:1/tmux:main/window:2")
+                .unwrap();
+        let tmux = parsed.tmux.as_ref().unwrap();
+        assert_eq!(tmux.session, "main");
+        assert_eq!(tmux.window.as_deref(), Some("2"));
+        assert!(tmux.pane.is_none());
+    }
+
+    #[test]
+    fn test_parse_terminal_uri_no_tmux() {
+        let parsed = parse_terminal_uri("workspace://kitty/window:1/tab:2").unwrap();
+        assert!(parsed.tmux.is_none());
     }
 
     #[test]

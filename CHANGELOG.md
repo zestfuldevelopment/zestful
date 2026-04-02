@@ -2,7 +2,7 @@
 
 All notable changes to the Zestful CLI will be documented in this file.
 
-## [3.1.0] - 2026-04-01
+## [3.1.0] - 2026-04-02
 
 ### Added
 - `zestful inspect` — inspect running terminals, multiplexers, IDEs, and browsers
@@ -12,7 +12,11 @@ All notable changes to the Zestful CLI will be documented in this file.
 - `zestful focus` — focus a terminal tab directly from the CLI
   - Accepts a `workspace://` URI positional arg or `--app`/`--window-id`/`--tab-id` flags
   - Same focus logic as the daemon, no HTTP round-trip
-  - Handles shelldon multiplexer tabs embedded in URIs
+  - Handles shelldon and tmux multiplexer segments embedded in URIs
+- tmux focus — clicking a notification from inside tmux switches to the correct tmux window and pane
+  - Parses `tmux:<session>/window:<idx>/pane:<idx>` segments from `workspace://` URIs
+  - Runs `tmux select-window` + `tmux select-pane` independently of terminal tab focus
+  - Works in both daemon and `zestful focus` CLI
 - Built-in workspace inspector — terminal/multiplexer/IDE/browser detection is now part of the zestful binary
   - Detects: iTerm2, kitty, WezTerm, Terminal.app, Alacritty, Ghostty, GNOME Terminal, Command Prompt, PowerShell
   - Multiplexers: tmux, zellij, shelldon
