@@ -3,6 +3,9 @@
 #[cfg(target_os = "macos")]
 mod chrome;
 
+#[cfg(target_os = "windows")]
+mod chrome_windows;
+
 use anyhow::Result;
 use crate::workspace::types::BrowserInstance;
 
@@ -16,6 +19,10 @@ pub async fn handle_focus(app: &str, window_id: Option<&str>, tab_id: Option<&st
         #[cfg(target_os = "macos")]
         {
             chrome::focus(win_id, tab_index).await?;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            chrome_windows::focus(win_id).await?;
         }
     } else {
         // Generic: just activate the app
@@ -31,6 +38,13 @@ pub fn detect_all() -> Result<Vec<BrowserInstance>> {
     #[cfg(target_os = "macos")]
     {
         if let Ok(Some(instance)) = chrome::detect() {
+            browsers.push(instance);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(Some(instance)) = chrome_windows::detect() {
             browsers.push(instance);
         }
     }
