@@ -109,6 +109,28 @@
     {
       "type": "lldb",
       "request": "launch",
+      "name": "test-focus (PowerShell)",
+      "preLaunchTask": "kill-zestful",
+      "cargo": {
+        "args": ["build", "--bin=zestful"]
+      },
+      "args": ["test-focus", "--app", "powershell"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "test-focus (Cmd)",
+      "preLaunchTask": "kill-zestful",
+      "cargo": {
+        "args": ["build", "--bin=zestful"]
+      },
+      "args": ["test-focus", "--app", "cmd"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
       "name": "test-focus (Chrome)",
       "preLaunchTask": "kill-zestful",
       "cargo": {

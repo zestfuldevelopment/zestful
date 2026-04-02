@@ -18,7 +18,7 @@ pub fn detect() -> Result<Option<TerminalEmulator>> {
         .and_then(|t| t.shell_pid);
 
     Ok(Some(TerminalEmulator {
-        app: "Command Prompt".into(),
+        app: "Cmd".into(),
         pid: first_pid,
         windows,
     }))
@@ -126,16 +126,27 @@ pub async fn focus(window_id: Option<&str>) -> Result<()> {
 
 #[cfg(target_os = "windows")]
 fn focus_sync(window_id: Option<&str>) -> Result<()> {
-    let target = match window_id {
-        Some(pid) if pid.chars().all(|c| c.is_ascii_digit()) => pid.to_string(),
-        _ => "\"cmd.exe\"".to_string(),
+    // Inline C# P/Invoke — try/catch silences "type already exists" on repeated calls.
+    let add_type = r#"try { Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class ZestfulWin32 { [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); }' } catch {}"#;
+
+    let activate = match window_id {
+        Some(pid) if pid.chars().all(|c| c.is_ascii_digit()) => format!(
+            "$p = Get-Process -Id {} -ErrorAction SilentlyContinue; \
+             if ($p -and $p.MainWindowHandle -ne 0) {{ \
+               [ZestfulWin32]::ShowWindow($p.MainWindowHandle, 9); \
+               [ZestfulWin32]::SetForegroundWindow($p.MainWindowHandle) }}",
+            pid
+        ),
+        _ => String::from(
+            "$p = Get-Process -Name cmd -ErrorAction SilentlyContinue \
+             | Select-Object -First 1; \
+             if ($p -and $p.MainWindowHandle -ne 0) { \
+               [ZestfulWin32]::ShowWindow($p.MainWindowHandle, 9); \
+               [ZestfulWin32]::SetForegroundWindow($p.MainWindowHandle) }"
+        ),
     };
 
-    let script = format!(
-        "Add-Type -AssemblyName Microsoft.VisualBasic; \
-         [Microsoft.VisualBasic.Interaction]::AppActivate({})",
-        target
-    );
+    let script = format!("{}; {}", add_type, activate);
 
     let _ = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
