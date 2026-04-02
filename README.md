@@ -52,7 +52,7 @@ zestful notify --agent <name> --message <msg> [options]
 | `--terminal-uri` | No | Terminal URI for focus (auto-detected) |
 | `--no-push` | No | Suppress push notification for this event |
 
-Click-to-focus is automatic — [`terminal-inspector`](https://crates.io/crates/terminal-inspector) detects your terminal, window, tab, and multiplexer session. No flags needed.
+Click-to-focus is automatic — the built-in workspace inspector detects your terminal, window, tab, and multiplexer session. No flags needed.
 
 ### `zestful watch`
 
@@ -90,6 +90,32 @@ ssh -R 21547:localhost:21547 dev@myserver.com
 ### `zestful daemon`
 
 Starts the focus daemon on `localhost:21548`. The daemon handles terminal tab switching when you click a notification in the Zestful app. It is auto-started by other commands — you rarely need to run this manually.
+
+### `zestful focus`
+
+Focus a terminal tab directly from the command line.
+
+```bash
+zestful focus workspace://iterm2/window:26411/tab:3   # by URI
+zestful focus --app iTerm2 --tab-id 3                  # by app name + tab
+zestful focus --app kitty --window-id 1 --tab-id 7     # with window ID
+```
+
+Uses the same focus logic as the daemon but runs directly — no HTTP round-trip. Handles shelldon multiplexer tabs embedded in the URI automatically.
+
+### `zestful inspect`
+
+Inspect running terminals, multiplexers, IDEs, and browsers.
+
+```bash
+zestful inspect                     # JSON output of everything
+zestful inspect --pretty            # human-readable output
+zestful inspect where               # print workspace:// URI for current terminal
+zestful inspect terminals --pretty  # just terminal emulators
+zestful inspect tmux --pretty       # just tmux sessions
+```
+
+Subcommands: `terminals`, `tmux`, `shelldon`, `zellij`, `ides`, `browsers`, `where`, `all` (default).
 
 ### Severity Levels
 
@@ -172,7 +198,7 @@ zestful notify --agent "ci" --message "Build failed!" --severity urgent
 The `zestful` binary serves two roles:
 
 - **CLI mode** (`notify`, `watch`, `ssh`) — synchronous commands that send HTTP requests to the Zestful Mac app on `localhost:21547`. No async runtime needed.
-- **Daemon mode** (`daemon`) — an async [axum](https://github.com/tokio-rs/axum) server on `localhost:21548` that handles terminal focus switching. Uses the [iterm2-client](https://crates.io/crates/iterm2-client) crate for native iTerm2 tab switching and [terminal-inspector](https://crates.io/crates/terminal-inspector) for automatic terminal detection.
+- **Daemon mode** (`daemon`) — an async [axum](https://github.com/tokio-rs/axum) server on `localhost:21548` that handles terminal focus switching. Uses the [iterm2-client](https://crates.io/crates/iterm2-client) crate for native iTerm2 tab switching and a built-in workspace inspector for automatic terminal/multiplexer/IDE/browser detection.
 
 ```
 Agent hook fires
@@ -189,7 +215,7 @@ The daemon auto-starts when any CLI command runs.
 
 1. The Zestful Mac app runs a local HTTP server on `localhost:21547`
 2. The CLI sends notifications via HTTP POST with an auth token
-3. `terminal-inspector::locate()` auto-captures a `terminal://` URI identifying the exact terminal/tab/pane
+3. `workspace::locate()` auto-captures a `workspace://` URI identifying the exact terminal/tab/pane
 4. The app shows alerts in the floating overlay and menu bar
 5. If logged in, alerts forward as push notifications to your iPhone
 6. Click any alert to focus the agent's terminal via the focus daemon

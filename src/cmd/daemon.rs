@@ -5,7 +5,7 @@
 //! Requires `X-Zestful-Token` authentication.
 
 use crate::config;
-use crate::focus;
+use crate::workspace::{terminals, uri};
 use anyhow::Result;
 use axum::{
     extract::{DefaultBodyLimit, Json},
@@ -19,7 +19,7 @@ use std::fs;
 
 #[derive(Deserialize)]
 struct FocusRequest {
-    /// Terminal URI from terminal-inspector (e.g. terminal://iterm2/window:1/tab:2)
+    /// Terminal URI (e.g. workspace://iterm2/window:1/tab:2)
     terminal_uri: Option<String>,
     /// Legacy fields — used as fallback when terminal_uri is absent
     app: Option<String>,
@@ -101,7 +101,7 @@ async fn handle_focus(
 
     // Prefer terminal_uri; fall back to legacy app/window_id/tab_id fields
     let parsed = if let Some(ref uri) = req.terminal_uri {
-        match focus::parse_terminal_uri(uri) {
+        match uri::parse_terminal_uri(uri) {
             Some(p) => p,
             None => {
                 return (
@@ -112,7 +112,7 @@ async fn handle_focus(
         }
     } else {
         match req.app {
-            Some(app) if !app.is_empty() => focus::ParsedTerminalUri {
+            Some(app) if !app.is_empty() => uri::ParsedTerminalUri {
                 app,
                 window_id: req.window_id,
                 tab_id: req.tab_id,
@@ -137,7 +137,7 @@ async fn handle_focus(
     ));
 
     // Focus the terminal emulator tab
-    if let Err(e) = focus::handle_focus(
+    if let Err(e) = terminals::handle_focus(
         &parsed.app,
         parsed.window_id.as_deref(),
         parsed.tab_id.as_deref(),
@@ -149,7 +149,7 @@ async fn handle_focus(
 
     // Focus the shelldon tab within the terminal
     if let Some(ref shelldon) = parsed.shelldon {
-        if let Err(e) = focus::shelldon::focus(shelldon).await {
+        if let Err(e) = crate::workspace::multiplexers::shelldon::focus(shelldon).await {
             crate::log::log("daemon", &format!("shelldon focus error: {}", e));
         }
     }
@@ -367,7 +367,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Should succeed at HTTP level but focus::handle_focus will reject the invalid chars
+        // Should succeed at HTTP level but terminals::handle_focus will reject the invalid chars
         // The response is still 200 because the error is logged, not returned
         // But the osascript won't execute arbitrary code due to validation
         assert!(response.status().is_success() || response.status().is_client_error());

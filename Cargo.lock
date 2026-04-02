@@ -1276,18 +1276,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "workspace-inspector"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0054d561dd4fd15253d8cf6dc6b5957c2abe467f7b28fde6733412cd1c11adbb"
-dependencies = [
- "anyhow",
- "clap",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "zerocopy"
 version = "0.8.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1329,7 +1317,7 @@ dependencies = [
 
 [[package]]
 name = "zestful"
-version = "3.0.0"
+version = "3.1.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1341,7 +1329,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tower",
- "workspace-inspector",
 ]
 
 [[package]]

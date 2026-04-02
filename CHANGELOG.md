@@ -2,6 +2,33 @@
 
 All notable changes to the Zestful CLI will be documented in this file.
 
+## [3.1.0] - 2026-04-01
+
+### Added
+- `zestful inspect` — inspect running terminals, multiplexers, IDEs, and browsers
+  - Subcommands: `terminals`, `tmux`, `shelldon`, `zellij`, `ides`, `browsers`, `where`, `all`
+  - `--pretty` flag for human-readable output, JSON by default
+  - `zestful inspect where` prints the `workspace://` URI for the current terminal location
+- `zestful focus` — focus a terminal tab directly from the CLI
+  - Accepts a `workspace://` URI positional arg or `--app`/`--window-id`/`--tab-id` flags
+  - Same focus logic as the daemon, no HTTP round-trip
+  - Handles shelldon multiplexer tabs embedded in URIs
+- Built-in workspace inspector — terminal/multiplexer/IDE/browser detection is now part of the zestful binary
+  - Detects: iTerm2, kitty, WezTerm, Terminal.app, Alacritty, Ghostty, GNOME Terminal, Command Prompt, PowerShell
+  - Multiplexers: tmux, zellij, shelldon
+  - IDEs: Xcode
+  - Browsers: Google Chrome
+  - Focus handlers merged with detection — detect and focus code for each terminal lives in one module
+
+### Changed
+- Terminal detection and focus code merged into `src/workspace/` module tree
+- Focus dispatch moved from `src/focus/` to `src/workspace/terminals/`
+- URI parsing moved to `src/workspace/uri.rs`
+
+### Removed
+- `workspace-inspector` external crate dependency — all detection code is now built-in
+- `src/focus/` directory — replaced by `src/workspace/terminals/` (merged detect+focus)
+
 ## [3.0.0] - 2026-03-19
 
 Complete rewrite from bash/Node.js to Rust. A single static binary replaces the

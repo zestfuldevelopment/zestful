@@ -1,8 +1,8 @@
 //! `zestful notify` — send a notification to the Zestful Mac app.
 //!
 //! Builds a JSON payload and POSTs it to `localhost:{port}/notify` with the
-//! auth token. Auto-captures the terminal URI via `terminal-inspector` for
-//! click-to-focus.
+//! auth token. Auto-captures the terminal URI via the built-in workspace
+//! inspector for click-to-focus.
 
 use crate::config;
 use anyhow::Result;
@@ -37,10 +37,10 @@ pub fn run(
     })?;
     let port = config::read_port();
 
-    // Use explicit URI if provided, otherwise auto-detect via terminal-inspector,
+    // Use explicit URI if provided, otherwise auto-detect via workspace inspector,
     // falling back to saved URI file (written by `zestful ssh` for remote sessions)
     let terminal_uri = terminal_uri
-        .or_else(|| terminal_inspector::locate().ok())
+        .or_else(|| crate::workspace::locate().ok())
         .or_else(|| config::read_terminal_uri());
 
     crate::log::log("notify", &format!(

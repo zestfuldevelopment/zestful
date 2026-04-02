@@ -2,7 +2,7 @@
 //!
 //! Spawns the command as a child process, captures the exit code, and sends a
 //! notification with severity based on success/failure. Auto-captures terminal
-//! URI via `terminal-inspector` for click-to-focus.
+//! URI via the built-in workspace inspector for click-to-focus.
 
 use crate::{cmd::notify, config};
 use anyhow::{bail, Result};
@@ -20,7 +20,7 @@ pub fn run(agent: String, command: Vec<String>) -> Result<()> {
     let port = config::read_port();
 
     // Capture terminal URI before running the command (environment is stable now)
-    let terminal_uri = terminal_inspector::locate().ok();
+    let terminal_uri = crate::workspace::locate().ok();
 
     crate::log::log("watch", &format!("running: {}", command.join(" ")));
 

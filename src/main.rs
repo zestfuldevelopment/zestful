@@ -6,8 +6,8 @@
 
 mod cmd;
 mod config;
-mod focus;
 pub mod log;
+pub mod workspace;
 
 use clap::{Parser, Subcommand};
 
@@ -67,13 +67,42 @@ enum Commands {
 
     /// Start the focus daemon (usually auto-started)
     Daemon,
+
+    /// Focus a terminal tab by URI or app name
+    Focus {
+        /// Terminal URI (e.g. workspace://iterm2/window:1/tab:2)
+        #[arg(value_name = "URI")]
+        terminal_uri: Option<String>,
+
+        /// App name (alternative to URI)
+        #[arg(long)]
+        app: Option<String>,
+
+        /// Window ID
+        #[arg(long)]
+        window_id: Option<String>,
+
+        /// Tab ID
+        #[arg(long)]
+        tab_id: Option<String>,
+    },
+
+    /// Inspect running terminals, multiplexers, IDEs, and browsers
+    Inspect {
+        #[command(subcommand)]
+        command: Option<cmd::inspect::InspectCommand>,
+
+        /// Pretty-print human-readable output instead of JSON
+        #[arg(long, global = true)]
+        pretty: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Auto-start daemon for commands that need it
-    if !matches!(cli.command, Commands::Daemon) {
+    if !matches!(cli.command, Commands::Daemon | Commands::Inspect { .. } | Commands::Focus { .. }) {
         config::ensure_daemon();
     }
 
@@ -92,5 +121,11 @@ fn main() -> anyhow::Result<()> {
         Commands::Ssh { args } => cmd::ssh::run(args),
 
         Commands::Daemon => cmd::daemon::run(),
+
+        Commands::Focus { terminal_uri, app, window_id, tab_id } => {
+            cmd::focus::run(terminal_uri, app, window_id, tab_id)
+        }
+
+        Commands::Inspect { command, pretty } => cmd::inspect::run(command, pretty),
     }
 }

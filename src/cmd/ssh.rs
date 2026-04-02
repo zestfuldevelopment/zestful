@@ -22,7 +22,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
     let dest = &args[0];
 
     // Capture terminal URI for click-to-focus on the remote side
-    let terminal_uri = terminal_inspector::locate().ok();
+    let terminal_uri = crate::workspace::locate().ok();
 
     crate::log::log("ssh", &format!("connecting to {} uri={}", dest, terminal_uri.as_deref().unwrap_or("none")));
 
