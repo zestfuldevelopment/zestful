@@ -5,4 +5,5 @@ pub mod focus;
 pub mod inspect;
 pub mod notify;
 pub mod ssh;
+pub mod test_focus;
 pub mod watch;

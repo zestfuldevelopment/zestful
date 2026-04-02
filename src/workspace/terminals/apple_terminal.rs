@@ -103,37 +103,34 @@ pub fn detect() -> Result<Option<TerminalEmulator>> {
     }))
 }
 
-/// Focus a Terminal.app tab by tty.
-pub async fn focus(tab_id: Option<&str>) -> Result<()> {
+/// Focus a Terminal.app tab by window ID and tab index.
+pub async fn focus(window_id: Option<&str>, tab_id: Option<&str>) -> Result<()> {
     tokio::task::spawn_blocking({
+        let window_id = window_id.map(String::from);
         let tab_id = tab_id.map(String::from);
-        move || focus_sync(tab_id.as_deref())
+        move || focus_sync(window_id.as_deref(), tab_id.as_deref())
     })
     .await??;
     Ok(())
 }
 
-fn focus_sync(tab_id: Option<&str>) -> Result<()> {
-    let script = if let Some(tab_id) = tab_id {
-        let escaped = crate::workspace::uri::escape_applescript(tab_id);
-        format!(
-            r#"tell application "Terminal"
-  set target_tab to "{}"
+fn focus_sync(window_id: Option<&str>, tab_id: Option<&str>) -> Result<()> {
+    let script = match (window_id, tab_id) {
+        (Some(win_id), Some(tab_idx)) => {
+            // tab_id from the URI is a 1-based tab index; window_id is the AppleScript window id
+            let tab_index: u32 = tab_idx.parse().unwrap_or(1);
+            let win_id_int: i64 = win_id.parse().unwrap_or(-1);
+            format!(
+                r#"tell application "Terminal"
   try
     repeat with w in windows
       try
-        repeat with t in tabs of w
-          try
-            if tty of t contains target_tab then
-              set selected tab of w to t
-              set index of w to 1
-              activate
-              return
-            end if
-          on error
-            -- tab may have closed; skip it
-          end try
-        end repeat
+        if id of w is equal to {} then
+          set selected tab of w to tab {} of w
+          set index of w to 1
+          activate
+          return
+        end if
       on error
         -- window may have closed; skip it
       end try
@@ -142,10 +139,10 @@ fn focus_sync(tab_id: Option<&str>) -> Result<()> {
     -- windows list changed during iteration; ignore
   end try
 end tell"#,
-            escaped
-        )
-    } else {
-        r#"tell application "Terminal" to activate"#.to_string()
+                win_id_int, tab_index
+            )
+        }
+        _ => r#"tell application "Terminal" to activate"#.to_string(),
     };
 
     let _ = Command::new("osascript")
@@ -161,13 +158,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_focus_no_panic() {
-        let result = focus(None).await;
+        let result = focus(None, None).await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
-    async fn test_focus_with_tab() {
-        let result = focus(Some("/dev/ttys001")).await;
+    async fn test_focus_with_window_and_tab() {
+        let result = focus(Some("12345"), Some("1")).await;
         assert!(result.is_ok());
     }
 }

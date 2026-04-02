@@ -118,7 +118,7 @@ pub async fn handle_focus(app: &str, window_id: Option<&str>, tab_id: Option<&st
     } else if lower.contains("terminal") {
         #[cfg(target_os = "macos")]
         {
-            apple_terminal::focus(tab_id).await
+            apple_terminal::focus(window_id, tab_id).await
         }
         #[cfg(not(target_os = "macos"))]
         {

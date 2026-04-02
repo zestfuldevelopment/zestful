@@ -55,6 +55,45 @@
         "user@hostname"
       ],
       "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "focus",
+      "preLaunchTask": "kill-zestful",
+      "cargo": {
+        "args": ["build", "--bin=zestful"]
+      },
+      "args": [
+        "focus",
+        "--app", "Terminal"
+      ],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "inspect",
+      "preLaunchTask": "kill-zestful",
+      "cargo": {
+        "args": ["build", "--bin=zestful"]
+      },
+      "args": [
+        "inspect",
+        "--pretty"
+      ],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "test-focus",
+      "preLaunchTask": "kill-zestful",
+      "cargo": {
+        "args": ["build", "--bin=zestful"]
+      },
+      "args": ["test-focus"],
+      "cwd": "${workspaceFolder}"
     }
   ]
 }
