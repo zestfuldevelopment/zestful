@@ -2,7 +2,7 @@
 
 All notable changes to the Zestful CLI will be documented in this file.
 
-## [3.1.0] - 2026-04-02
+## [3.1.0] - 2026-04-03
 
 ### Added
 - `zestful inspect` — inspect running terminals, multiplexers, IDEs, and browsers
@@ -24,13 +24,18 @@ All notable changes to the Zestful CLI will be documented in this file.
   - Browsers: Google Chrome
   - Focus handlers merged with detection — detect and focus code for each terminal lives in one module
 
+### Fixed
+- iTerm2 window focus now raises the correct window by its AppleScript ID instead of activating a random window
+
 ### Changed
+- iTerm2 focus switched from iterm2-client API to AppleScript for both window and tab — detection and focus now use the same technique
 - Terminal detection and focus code merged into `src/workspace/` module tree
 - Focus dispatch moved from `src/focus/` to `src/workspace/terminals/`
 - URI parsing moved to `src/workspace/uri.rs`
 
 ### Removed
 - `workspace-inspector` external crate dependency — all detection code is now built-in
+- `iterm2-client` dependency — iTerm2 focus now uses AppleScript directly
 - `src/focus/` directory — replaced by `src/workspace/terminals/` (merged detect+focus)
 
 ## [3.0.0] - 2026-03-19

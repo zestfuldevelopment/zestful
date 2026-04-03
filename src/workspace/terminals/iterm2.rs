@@ -114,50 +114,61 @@ pub fn detect() -> Result<Option<TerminalEmulator>> {
     }))
 }
 
-/// Focus an iTerm2 window/tab using the native iterm2-client crate.
+/// Focus an iTerm2 window and tab via AppleScript.
+/// Both detection and focus use AppleScript integer window IDs and 1-based tab
+/// indices, so they are always consistent.
 pub async fn focus(window_id: Option<&str>, tab_id: Option<&str>) -> Result<()> {
-    if tab_id.is_some() {
-        if let Err(e) = focus_via_api(tab_id).await {
-            crate::log::log("daemon", &format!("iTerm2 API error (falling back to AppleScript): {}", e));
-        }
-    }
+    let window_id = window_id.map(String::from);
+    let tab_id = tab_id.map(String::from);
 
-    crate::workspace::uri::activate_app_sync("iTerm2");
+    tokio::task::spawn_blocking(move || {
+        focus_applescript(window_id.as_deref(), tab_id.as_deref())
+    })
+    .await??;
 
-    let _ = window_id;
     Ok(())
 }
 
-async fn focus_via_api(tab_id: Option<&str>) -> Result<()> {
-    use iterm2_client::{App, Connection};
-
-    let conn = Connection::connect("zestful-daemon").await?;
-    let app = App::new(conn);
-    let sessions = app.list_sessions().await?;
-
-    let tab_id = match tab_id {
-        Some(id) => id,
-        None => return Ok(()),
+fn focus_applescript(window_id: Option<&str>, tab_id: Option<&str>) -> Result<()> {
+    let script = match (window_id, tab_id) {
+        (Some(wid), Some(tid)) if wid.chars().all(|c| c.is_ascii_digit()) => {
+            let wid_int: i64 = wid.parse().unwrap_or(-1);
+            let tab_index: u32 = tid.parse().unwrap_or(1);
+            format!(
+                r#"tell application "iTerm2"
+  repeat with w in windows
+    if id of w is equal to {} then
+      select tab {} of w
+      set index of w to 1
+      activate
+      return
+    end if
+  end repeat
+  activate
+end tell"#,
+                wid_int, tab_index
+            )
+        }
+        (Some(wid), None) if wid.chars().all(|c| c.is_ascii_digit()) => {
+            let wid_int: i64 = wid.parse().unwrap_or(-1);
+            format!(
+                r#"tell application "iTerm2"
+  repeat with w in windows
+    if id of w is equal to {} then
+      set index of w to 1
+    end if
+  end repeat
+  activate
+end tell"#,
+                wid_int
+            )
+        }
+        _ => r#"tell application "iTerm2" to activate"#.to_string(),
     };
 
-    if let Ok(tab_idx) = tab_id.parse::<usize>() {
-        let zero_idx = tab_idx.saturating_sub(1);
-        for window in &sessions.windows {
-            if let Some(tab_info) = window.tabs.get(zero_idx) {
-                tab_info.tab.activate().await?;
-                return Ok(());
-            }
-        }
-    }
-
-    for window in &sessions.windows {
-        for tab_info in &window.tabs {
-            if tab_info.tab.id == tab_id {
-                tab_info.tab.activate().await?;
-                return Ok(());
-            }
-        }
-    }
+    let _ = Command::new("osascript")
+        .args(["-e", &script])
+        .output();
 
     Ok(())
 }
