@@ -26,9 +26,13 @@ All notable changes to the Zestful CLI will be documented in this file.
 
 ### Fixed
 - iTerm2 window focus now raises the correct window by its AppleScript ID instead of activating a random window
+- Kitty detection and focus rewritten — uses kitty's internal window IDs for reliable focus down to the exact split/pane
 
 ### Changed
 - iTerm2 focus switched from iterm2-client API to AppleScript for both window and tab — detection and focus now use the same technique
+- Kitty focus uses `kitty @ focus-window --match id:{id}` which handles OS window, tab, and split switching in one command
+- Kitty `locate()` uses `KITTY_WINDOW_ID` env var for instant detection without TTY matching
+- Kitty socket discovery improved — checks `KITTY_LISTEN_ON`, PID-suffixed paths, and `/tmp` scan
 - Terminal detection and focus code merged into `src/workspace/` module tree
 - Focus dispatch moved from `src/focus/` to `src/workspace/terminals/`
 - URI parsing moved to `src/workspace/uri.rs`

@@ -8,16 +8,24 @@ use crate::workspace::types::TerminalEmulator;
 pub fn locate() -> Result<String> {
     let mut segments: Vec<String> = Vec::new();
 
-    // Find our TTY by walking up the process tree
-    let tty = find_our_tty();
+    // Kitty sets KITTY_WINDOW_ID in each shell — use it directly
+    if let Ok(kitty_win_id) = std::env::var("KITTY_WINDOW_ID") {
+        if !kitty_win_id.is_empty() {
+            segments.push("kitty".into());
+            segments.push(format!("window:{}", kitty_win_id));
+        }
+    }
 
-    // Detect the terminal emulator layer
-    if let Some(tty_name) = &tty {
-        if let Some((app, win_id, tab_idx)) = find_terminal_for_tty(tty_name)? {
-            segments.push(app.to_lowercase().replace(' ', "-"));
-            segments.push(format!("window:{}", win_id));
-            if let Some(idx) = tab_idx {
-                segments.push(format!("tab:{}", idx));
+    // For non-kitty terminals, find our TTY and match against detected terminals
+    if segments.is_empty() {
+        let tty = find_our_tty();
+        if let Some(tty_name) = &tty {
+            if let Some((app, win_id, tab_idx)) = find_terminal_for_tty(tty_name)? {
+                segments.push(app.to_lowercase().replace(' ', "-"));
+                segments.push(format!("window:{}", win_id));
+                if let Some(idx) = tab_idx {
+                    segments.push(format!("tab:{}", idx));
+                }
             }
         }
     }
@@ -37,7 +45,7 @@ pub fn locate() -> Result<String> {
     }
 
     if segments.is_empty() {
-        if let Some(tty_name) = &tty {
+        if let Some(tty_name) = find_our_tty() {
             segments.push(format!("tty:{}", tty_name.replace("/dev/", "")));
         } else {
             segments.push("unknown".into());
