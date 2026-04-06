@@ -26,6 +26,8 @@ All notable changes to the Zestful CLI will be documented in this file.
 
 ### Fixed
 - iTerm2 window focus now raises the correct window by its AppleScript ID instead of activating a random window
+- iTerm2 split/pane detection — each pane is now a separate entry identified by TTY, fixes wrong tab numbers when tabs have splits
+- iTerm2 pane-level focus — focuses the exact pane within a tab, not just the tab
 - Kitty detection and focus rewritten — uses kitty's internal window IDs for reliable focus down to the exact split/pane
 
 ### Changed

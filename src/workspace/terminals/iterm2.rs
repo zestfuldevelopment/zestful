@@ -1,4 +1,8 @@
 //! iTerm2 detection and focus handler (macOS only).
+//!
+//! Each iTerm2 session (pane/split) maps to one entry with its TTY as the
+//! unique identifier. Focus uses AppleScript to find the session by TTY,
+//! select it, raise its window, and activate the app.
 
 use anyhow::Result;
 use std::process::Command;
@@ -59,8 +63,7 @@ pub fn detect() -> Result<Option<TerminalEmulator>> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut windows_map: std::collections::BTreeMap<String, Vec<TerminalTab>> =
-        std::collections::BTreeMap::new();
+    let mut windows = Vec::new();
 
     for line in stdout.lines() {
         let line = line.trim();
@@ -72,7 +75,7 @@ pub fn detect() -> Result<Option<TerminalEmulator>> {
             continue;
         }
 
-        let window_id = parts[0].to_string();
+        let _window_id = parts[0];
         let _tab_idx = parts[1];
         let title = parts[2].to_string();
         let tty = parts[3].to_string();
@@ -85,6 +88,9 @@ pub fn detect() -> Result<Option<TerminalEmulator>> {
 
         let cwd = shell_pid.and_then(process::get_cwd);
 
+        // Strip /dev/ prefix for cleaner URIs
+        let tty_id = tty.strip_prefix("/dev/").unwrap_or(&tty).to_string();
+
         let tab = TerminalTab {
             title,
             uri: None,
@@ -96,16 +102,12 @@ pub fn detect() -> Result<Option<TerminalEmulator>> {
             rows,
         };
 
-        windows_map
-            .entry(window_id)
-            .or_default()
-            .push(tab);
+        // Each session (pane/split) gets its own TerminalWindow with the TTY as ID
+        windows.push(TerminalWindow {
+            id: tty_id,
+            tabs: vec![tab],
+        });
     }
-
-    let windows: Vec<TerminalWindow> = windows_map
-        .into_iter()
-        .map(|(id, tabs)| TerminalWindow { id, tabs })
-        .collect();
 
     Ok(Some(TerminalEmulator {
         app: "iTerm2".into(),
@@ -114,53 +116,51 @@ pub fn detect() -> Result<Option<TerminalEmulator>> {
     }))
 }
 
-/// Focus an iTerm2 window and tab via AppleScript.
-/// Both detection and focus use AppleScript integer window IDs and 1-based tab
-/// indices, so they are always consistent.
-pub async fn focus(window_id: Option<&str>, tab_id: Option<&str>) -> Result<()> {
+/// Focus an iTerm2 session (pane) by its TTY.
+/// Finds the session by TTY, selects it (which switches tab and pane),
+/// raises the containing window, and activates the app.
+pub async fn focus(window_id: Option<&str>, _tab_id: Option<&str>) -> Result<()> {
     let window_id = window_id.map(String::from);
-    let tab_id = tab_id.map(String::from);
 
     tokio::task::spawn_blocking(move || {
-        focus_applescript(window_id.as_deref(), tab_id.as_deref())
+        focus_applescript(window_id.as_deref())
     })
     .await??;
 
     Ok(())
 }
 
-fn focus_applescript(window_id: Option<&str>, tab_id: Option<&str>) -> Result<()> {
-    let script = match (window_id, tab_id) {
-        (Some(wid), Some(tid)) if wid.chars().all(|c| c.is_ascii_digit()) => {
-            let wid_int: i64 = wid.parse().unwrap_or(-1);
-            let tab_index: u32 = tid.parse().unwrap_or(1);
+fn focus_applescript(tty_name: Option<&str>) -> Result<()> {
+    let script = match tty_name {
+        Some(tty) if !tty.is_empty() => {
+            let tty_path = if tty.starts_with("/dev/") {
+                tty.to_string()
+            } else {
+                format!("/dev/{}", tty)
+            };
+            let escaped = crate::workspace::uri::escape_applescript(&tty_path);
             format!(
                 r#"tell application "iTerm2"
   repeat with w in windows
-    if id of w is equal to {} then
-      select tab {} of w
-      set index of w to 1
-      activate
-      return
-    end if
+    set tabList to tabs of w
+    repeat with tabIdx from 1 to count of tabList
+      set t to item tabIdx of tabList
+      repeat with s in sessions of t
+        try
+          if tty of s is equal to "{}" then
+            select tab tabIdx of w
+            select s
+            set index of w to 1
+            activate
+            return
+          end if
+        end try
+      end repeat
+    end repeat
   end repeat
   activate
 end tell"#,
-                wid_int, tab_index
-            )
-        }
-        (Some(wid), None) if wid.chars().all(|c| c.is_ascii_digit()) => {
-            let wid_int: i64 = wid.parse().unwrap_or(-1);
-            format!(
-                r#"tell application "iTerm2"
-  repeat with w in windows
-    if id of w is equal to {} then
-      set index of w to 1
-    end if
-  end repeat
-  activate
-end tell"#,
-                wid_int
+                escaped
             )
         }
         _ => r#"tell application "iTerm2" to activate"#.to_string(),
@@ -184,8 +184,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_focus_with_ids_falls_back() {
-        let result = focus(Some("99999"), Some("1")).await;
+    async fn test_focus_with_tty() {
+        let result = focus(Some("ttys999"), None).await;
         assert!(result.is_ok());
     }
 }
