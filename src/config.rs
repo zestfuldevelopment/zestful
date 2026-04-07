@@ -17,9 +17,13 @@ const DEFAULT_PORT: u16 = 21547;
 /// Port the focus daemon listens on.
 const DAEMON_PORT: u16 = 21548;
 
-/// Returns `~/.config/zestful/`.
+/// Returns `~/.config/zestful/` on Unix-like systems or `%USERPROFILE%\.config\zestful\` on Windows.
 pub fn config_dir() -> PathBuf {
-    let home = env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let home = if cfg!(target_os = "windows") {
+        env::var("USERPROFILE").unwrap_or_else(|_| "C:\\Users\\Default".to_string())
+    } else {
+        env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
+    };
     PathBuf::from(home).join(".config").join("zestful")
 }
 
@@ -158,7 +162,9 @@ mod tests {
     #[test]
     fn test_config_dir_uses_home() {
         let dir = config_dir();
-        assert!(dir.to_str().unwrap().contains(".config/zestful"));
+        let path_str = dir.to_str().unwrap();
+        assert!(path_str.contains(".config"));
+        assert!(path_str.contains("zestful"));
     }
 
     #[test]
@@ -208,7 +214,9 @@ mod tests {
     fn test_token_file_path() {
         let path = token_file();
         assert!(path.ends_with("local-token"));
-        assert!(path.to_str().unwrap().contains(".config/zestful"));
+        let path_str = path.to_str().unwrap();
+        assert!(path_str.contains(".config"));
+        assert!(path_str.contains("zestful"));
     }
 
     #[test]
