@@ -1,7 +1,9 @@
 use anyhow::Result;
 use std::process::Command;
 
+#[cfg(not(target_os = "windows"))]
 use crate::workspace::terminals;
+#[cfg(not(target_os = "windows"))]
 use crate::workspace::types::TerminalEmulator;
 
 /// Determine where the current process is running and return a canonical URI.
@@ -16,7 +18,21 @@ pub fn locate() -> Result<String> {
         }
     }
 
-    // For non-kitty terminals, find our TTY and match against detected terminals
+    // On Windows, detect Windows Terminal via process parent chain + UI Automation.
+    // (TTY-based detection does not apply on Windows.)
+    #[cfg(target_os = "windows")]
+    if segments.is_empty() {
+        if let Some((hwnd, tab_idx)) = find_windows_terminal() {
+            segments.push("windows-terminal".into());
+            segments.push(format!("window:{}", hwnd));
+            if let Some(idx) = tab_idx {
+                segments.push(format!("tab:{}", idx));
+            }
+        }
+    }
+
+    // For non-kitty terminals on Unix, find our TTY and match against detected terminals
+    #[cfg(not(target_os = "windows"))]
     if segments.is_empty() {
         let tty = find_our_tty();
         if let Some(tty_name) = &tty {
@@ -53,6 +69,91 @@ pub fn locate() -> Result<String> {
     }
 
     Ok(format!("workspace://{}", segments.join("/")))
+}
+
+/// On Windows, detect the active Windows Terminal window and its selected tab.
+///
+/// On Windows 11 with the default terminal ("defterm") setting, WT intercepts console
+/// creation at the OS level — the shell process's parent is `explorer.exe`, not
+/// `WindowsTerminal.exe`. Walking the parent chain therefore never finds WT. Instead,
+/// we check directly whether `WindowsTerminal.exe` is running and grab its visible
+/// window + selected tab via UI Automation (strategy 3 from the focus code).
+///
+/// Known limitation: if multiple WT windows are open this returns whichever EnumWindows
+/// enumerates first. Accurate per-window matching would require ConPTY-level introspection.
+#[cfg(target_os = "windows")]
+fn find_windows_terminal() -> Option<(String, Option<u32>)> {
+    let script = r#"
+$wtPids = [uint32[]](Get-Process -Name WindowsTerminal -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty Id)
+if ($wtPids.Count -eq 0) { exit }
+
+try { Add-Type -AssemblyName UIAutomationClient; Add-Type -AssemblyName UIAutomationTypes } catch {}
+try { Add-Type -TypeDefinition '
+using System; using System.Runtime.InteropServices;
+public class ZestfulLocateWT2 {
+    public delegate bool EWP(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EWP cb, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
+    [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr h);
+    public static long FindHwnd(uint[] pids) {
+        var pidSet = new System.Collections.Generic.HashSet<uint>(pids);
+        long result = 0;
+        EWP cb = (h, l) => {
+            if (!IsWindowVisible(h)) return true;
+            uint p; GetWindowThreadProcessId(h, out p);
+            if (pidSet.Contains(p) && GetWindowTextLength(h) > 0) { result = (long)h; return false; }
+            return true;
+        };
+        EnumWindows(cb, IntPtr.Zero);
+        return result;
+    }
+}' } catch {}
+
+$hwnd = [ZestfulLocateWT2]::FindHwnd($wtPids)
+if ($hwnd -eq 0) { exit }
+
+try {
+    $ae = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$hwnd)
+    $cond = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::TabItem)
+    $tabs = $ae.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
+    $tabIdx = 1
+    for ($i = 0; $i -lt $tabs.Count; $i++) {
+        try {
+            $sel = $tabs[$i].GetCurrentPattern(
+                [System.Windows.Automation.SelectionItemPattern]::Pattern)
+            if ($sel.Current.IsSelected) { $tabIdx = $i + 1; break }
+        } catch {}
+    }
+    Write-Output "$hwnd|$tabIdx"
+} catch {
+    Write-Output "$hwnd|1"
+}
+"#;
+
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+        .ok()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout.trim();
+    if line.is_empty() {
+        return None;
+    }
+
+    let parts: Vec<&str> = line.splitn(2, '|').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let hwnd = parts[0].trim().to_string();
+    let tab_idx: u32 = parts[1].trim().parse().ok()?;
+
+    Some((hwnd, Some(tab_idx)))
 }
 
 /// Walk up the process tree from our PID to find a TTY.
@@ -93,6 +194,7 @@ fn find_our_tty() -> Option<String> {
 }
 
 /// Match a TTY against detected terminal emulators to find which app/window/tab owns it.
+#[cfg(not(target_os = "windows"))]
 fn find_terminal_for_tty(tty: &str) -> Result<Option<(String, String, Option<u32>)>> {
     let terminals = terminals::detect_all()?;
 
@@ -132,6 +234,7 @@ fn find_terminal_for_tty(tty: &str) -> Result<Option<(String, String, Option<u32
     Ok(None)
 }
 
+#[cfg(not(target_os = "windows"))]
 fn find_terminal_for_tty_inner(
     terminals: &[TerminalEmulator],
     tty: &str,
@@ -155,6 +258,7 @@ fn find_terminal_for_tty_inner(
 }
 
 /// Find the TTY of the tmux client (the terminal tab that tmux is running in).
+#[cfg(not(target_os = "windows"))]
 fn find_tmux_client_tty() -> Option<String> {
     let output = Command::new("tmux")
         .args(["display-message", "-p", "#{client_tty}"])
@@ -174,6 +278,7 @@ fn find_tmux_client_tty() -> Option<String> {
 }
 
 /// Find the TTY of the parent shelldon process.
+#[cfg(not(target_os = "windows"))]
 fn find_shelldon_tty() -> Option<String> {
     let pid = std::process::id();
     let mut current_pid = pid;

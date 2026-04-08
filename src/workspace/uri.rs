@@ -115,6 +115,7 @@ pub fn parse_terminal_uri(uri: &str) -> Option<ParsedTerminalUri> {
         "powershell" => "PowerShell".to_string(),
         "wezterm" => "WezTerm".to_string(),
         "terminal" | "apple_terminal" => "Terminal".to_string(),
+        "windows-terminal" => "Windows Terminal".to_string(),
         other => other.to_string(),
     };
 
@@ -307,6 +308,14 @@ mod tests {
     fn test_parse_terminal_uri_apple_terminal() {
         let parsed = parse_terminal_uri("workspace://apple_terminal/window:1").unwrap();
         assert_eq!(parsed.app, "Terminal");
+    }
+
+    #[test]
+    fn test_parse_terminal_uri_windows_terminal() {
+        let parsed = parse_terminal_uri("workspace://windows-terminal/window:131072/tab:2").unwrap();
+        assert_eq!(parsed.app, "Windows Terminal");
+        assert_eq!(parsed.window_id.as_deref(), Some("131072"));
+        assert_eq!(parsed.tab_id.as_deref(), Some("2"));
     }
 
     #[test]
