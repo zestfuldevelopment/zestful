@@ -16,13 +16,22 @@ impl InspectorOutput {
     pub fn populate_uris(&mut self) {
         for term in &mut self.terminals {
             let app = term.app.to_lowercase();
+            let is_windows_terminal = app == "windows terminal";
             for win in &mut term.windows {
                 for (i, tab) in win.tabs.iter_mut().enumerate() {
+                    // For Windows Terminal, use the shell PID as the tab identifier so
+                    // that focus remains correct even after the user reorders tabs by drag.
+                    let tab_id = if is_windows_terminal {
+                        tab.shell_pid
+                            .filter(|&p| p != 0)
+                            .map(|p| p.to_string())
+                            .unwrap_or_else(|| (i + 1).to_string())
+                    } else {
+                        (i + 1).to_string()
+                    };
                     tab.uri = Some(format!(
                         "workspace://{}/window:{}/tab:{}",
-                        app,
-                        win.id,
-                        i + 1
+                        app, win.id, tab_id
                     ));
                 }
             }
