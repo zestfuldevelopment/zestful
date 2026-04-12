@@ -25,94 +25,44 @@ pub fn detect() -> Result<Option<TerminalEmulator>> {
 }
 
 fn collect_windows() -> Vec<TerminalWindow> {
-    let mut windows = Vec::new();
+    let mut entries: Vec<(u32, String, &str)> = Vec::new();
 
-    for &exe_name in &["powershell.exe", "pwsh.exe"] {
-        let entries = query_tasklist(exe_name);
-        for (pid, title) in entries {
-            let cwd = process::get_cwd(pid);
-            let shell = if exe_name == "pwsh.exe" {
-                "pwsh"
-            } else {
-                "powershell"
-            };
-            let tab = TerminalTab {
+    for &(exe_name, shell_name) in &[
+        ("powershell.exe", "powershell"),
+        ("pwsh.exe", "pwsh"),
+    ] {
+        for (pid, title) in process::query_tasklist(exe_name) {
+            entries.push((pid, title, shell_name));
+        }
+    }
+
+    if entries.is_empty() {
+        return Vec::new();
+    }
+
+    let pids: Vec<u32> = entries.iter().map(|(pid, _, _)| *pid).collect();
+    let cwds = process::get_cwds_batch(&pids);
+
+    entries
+        .into_iter()
+        .map(|(pid, title, shell_name)| TerminalWindow {
+            id: pid.to_string(),
+            tabs: vec![TerminalTab {
                 title: if title.is_empty() {
-                    shell.to_string()
+                    shell_name.to_string()
                 } else {
                     title
                 },
                 uri: None,
                 tty: None,
                 shell_pid: Some(pid),
-                shell: Some(shell.to_string()),
-                cwd,
+                shell: Some(shell_name.to_string()),
+                cwd: cwds.get(&pid).cloned(),
                 columns: None,
                 rows: None,
-            };
-            windows.push(TerminalWindow {
-                id: pid.to_string(),
-                tabs: vec![tab],
-            });
-        }
-    }
-
-    windows
-}
-
-/// Query tasklist for a specific executable and return (pid, window_title) pairs.
-fn query_tasklist(exe_name: &str) -> Vec<(u32, String)> {
-    let output = Command::new("tasklist")
-        .args([
-            "/fi",
-            &format!("imagename eq {}", exe_name),
-            "/fo",
-            "csv",
-            "/v",
-            "/nh",
-        ])
-        .output();
-
-    let output = match output {
-        Ok(o) if o.status.success() => o,
-        _ => return vec![],
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut results = Vec::new();
-
-    for line in stdout.lines() {
-        let line = line.trim();
-        if !line.starts_with('"') {
-            continue;
-        }
-
-        let stripped = line
-            .strip_prefix('"')
-            .unwrap_or(line)
-            .trim_end_matches('"');
-        let fields: Vec<&str> = stripped.split("\",\"").collect();
-
-        if fields.len() < 9 {
-            continue;
-        }
-
-        let pid: u32 = match fields[1].parse() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-
-        let title = fields[8].trim();
-        let title = if title == "N/A" || title == "OleMainThreadWndName" {
-            String::new()
-        } else {
-            title.to_string()
-        };
-
-        results.push((pid, title));
-    }
-
-    results
+            }],
+        })
+        .collect()
 }
 
 /// Focus a PowerShell window.

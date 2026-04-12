@@ -1,7 +1,7 @@
 use std::process::Command;
 
 /// Get the current working directory of a process by PID.
-/// Uses /proc on Linux, wmic on Windows, falls back to lsof on other platforms.
+/// Uses /proc on Linux, Get-CimInstance on Windows, falls back to lsof on other platforms.
 pub fn get_cwd(pid: u32) -> Option<String> {
     #[cfg(target_os = "linux")]
     {
@@ -12,32 +12,7 @@ pub fn get_cwd(pid: u32) -> Option<String> {
 
     #[cfg(target_os = "windows")]
     {
-        let output = Command::new("wmic")
-            .args([
-                "process",
-                "where",
-                &format!("processid={}", pid),
-                "get",
-                "WorkingDirectory",
-                "/format:value",
-            ])
-            .output()
-            .ok()?;
-
-        if !output.status.success() {
-            return None;
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            if let Some(val) = line.trim().strip_prefix("WorkingDirectory=") {
-                let dir = val.trim();
-                if !dir.is_empty() {
-                    return Some(dir.to_string());
-                }
-            }
-        }
-        return None;
+        return get_cwds_batch(&[pid]).remove(&pid);
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
@@ -59,6 +34,115 @@ pub fn get_cwd(pid: u32) -> Option<String> {
         }
         None
     }
+}
+
+/// Batch-query the working directory for multiple processes in a single subprocess call.
+/// Returns a map of PID → CWD for any processes where the CWD could be determined.
+#[cfg(target_os = "windows")]
+pub fn get_cwds_batch(pids: &[u32]) -> std::collections::HashMap<u32, String> {
+    use std::collections::HashMap;
+
+    if pids.is_empty() {
+        return HashMap::new();
+    }
+
+    let filter = pids
+        .iter()
+        .map(|p| format!("ProcessId={}", p))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+
+    let script = format!(
+        "Get-CimInstance Win32_Process -Filter '{filter}' | \
+         ForEach-Object {{ \"$($_.ProcessId)|$($_.WorkingDirectory)\" }}"
+    );
+
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output();
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return HashMap::new(),
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut map = HashMap::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if let Some((pid_str, cwd)) = line.split_once('|') {
+            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                let cwd = cwd.trim();
+                if !cwd.is_empty() {
+                    map.insert(pid, cwd.to_string());
+                }
+            }
+        }
+    }
+
+    map
+}
+
+/// Query tasklist for a named executable and return (pid, window_title) pairs.
+/// Filters out processes with no console window (WINDOWTITLE eq N/A) so that
+/// non-interactive subprocesses (e.g. `cmd /c …`) are excluded.
+#[cfg(target_os = "windows")]
+pub fn query_tasklist(exe_name: &str) -> Vec<(u32, String)> {
+    let output = Command::new("tasklist")
+        .args([
+            "/fi",
+            &format!("imagename eq {}", exe_name),
+            "/fi",
+            "WINDOWTITLE ne N/A",
+            "/fo",
+            "csv",
+            "/v",
+            "/nh",
+        ])
+        .output();
+
+    let output = match output {
+        Ok(o) if o.status.success() => o,
+        _ => return vec![],
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut results = Vec::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if !line.starts_with('"') {
+            continue;
+        }
+
+        let stripped = line
+            .strip_prefix('"')
+            .unwrap_or(line)
+            .trim_end_matches('"');
+        let fields: Vec<&str> = stripped.split("\",\"").collect();
+
+        if fields.len() < 9 {
+            continue;
+        }
+
+        let pid: u32 = match fields[1].parse() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        // OleMainThreadWndName is an invisible COM message window, not a real console.
+        let title = fields[8].trim();
+        let title = if title == "OleMainThreadWndName" {
+            String::new()
+        } else {
+            title.to_string()
+        };
+
+        results.push((pid, title));
+    }
+
+    results
 }
 
 /// Given a tty name (e.g. "/dev/ttys000" or "ttys000"), find the shell process and its PID.
