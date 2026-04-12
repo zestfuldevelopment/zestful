@@ -167,6 +167,224 @@ fn no_false_positives_from_background_cmd() {
     }
 }
 
+// ── Windows Terminal helpers ──────────────────────────────────────────────────
+
+/// Returns true if `wt.exe` is available on this system.
+fn wt_available() -> bool {
+    // Check the standard MSIX install location first.
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let path = std::path::Path::new(&local)
+            .join("Microsoft")
+            .join("WindowsApps")
+            .join("wt.exe");
+        if path.exists() {
+            return true;
+        }
+    }
+    // Fall back to a PATH search.
+    Command::new("where")
+        .arg("wt.exe")
+        .output()
+        .map_or(false, |o| o.status.success())
+}
+
+/// Returns the set of shell PIDs currently hosted in any Windows Terminal window.
+fn wt_shell_pids_snapshot() -> std::collections::HashSet<u32> {
+    super::windows_terminal::detect()
+        .ok()
+        .flatten()
+        .map(|t| {
+            t.windows
+                .iter()
+                .flat_map(|w| w.tabs.iter())
+                .filter_map(|tab| tab.shell_pid)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// RAII guard that force-kills WT-hosted shell processes when dropped.
+/// Windows Terminal closes the tab automatically once its shell exits.
+struct WtGuard {
+    shell_pids: Vec<u32>,
+}
+
+impl Drop for WtGuard {
+    fn drop(&mut self) {
+        for pid in &self.shell_pids {
+            let _ = Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .output();
+        }
+    }
+}
+
+/// Opens Windows Terminal with `tab_count` cmd.exe tabs in a brand-new window
+/// (`--window new`).  Returns `(hwnd, shell_pid)` pairs for the new tabs plus
+/// a cleanup guard.
+///
+/// Uses a before/after snapshot of detected shell PIDs to identify the tabs
+/// that belong to this test, so existing WT windows are not disturbed.
+fn open_wt_tabs(tab_count: usize) -> (Vec<(String, u32)>, WtGuard) {
+    assert!(tab_count >= 1);
+
+    let before = wt_shell_pids_snapshot();
+
+    // wt --window new cmd.exe /k [; new-tab cmd.exe /k ...]
+    let mut args: Vec<&str> = vec!["--window", "new", "cmd.exe", "/k"];
+    for _ in 1..tab_count {
+        args.extend_from_slice(&[";", "new-tab", "cmd.exe", "/k"]);
+    }
+
+    Command::new("wt.exe")
+        .args(&args)
+        .spawn()
+        .expect("failed to spawn wt.exe");
+
+    // Allow ~2 s for WT to start plus ~1 s per additional tab.
+    let wait_ms = 2000 + (tab_count.saturating_sub(1) as u64 * 1000);
+    std::thread::sleep(Duration::from_millis(wait_ms));
+
+    let terminal = super::windows_terminal::detect()
+        .expect("windows_terminal::detect() returned Err")
+        .expect("windows_terminal::detect() returned None — WT not detected after launch");
+
+    // New tabs are those whose shell_pid was absent in the before-snapshot.
+    let new_tabs: Vec<(String, u32)> = terminal
+        .windows
+        .iter()
+        .flat_map(|w| {
+            let hwnd = w.id.clone();
+            w.tabs
+                .iter()
+                .filter_map(move |t| t.shell_pid.map(|pid| (hwnd.clone(), pid)))
+        })
+        .filter(|(_, pid)| !before.contains(pid))
+        .collect();
+
+    let guard = WtGuard {
+        shell_pids: new_tabs.iter().map(|(_, pid)| *pid).collect(),
+    };
+
+    (new_tabs, guard)
+}
+
+// ── Windows Terminal detection tests ─────────────────────────────────────────
+
+#[test]
+#[ignore = "opens Windows Terminal with 2 tabs; run with: cargo test -- --ignored"]
+fn detect_wt_two_tabs() {
+    if !wt_available() {
+        eprintln!("wt.exe not found — skipping");
+        return;
+    }
+
+    let (new_tabs, _guard) = open_wt_tabs(2);
+
+    assert!(
+        new_tabs.len() >= 2,
+        "expected ≥2 new WT tabs, detected {} new tab(s): {:?}",
+        new_tabs.len(),
+        new_tabs,
+    );
+
+    // Both tabs must be in the same WT window (same HWND).
+    let hwnds: std::collections::HashSet<&str> =
+        new_tabs.iter().map(|(h, _)| h.as_str()).collect();
+    assert_eq!(
+        hwnds.len(),
+        1,
+        "new tabs were spread across multiple WT windows: {:?}",
+        hwnds,
+    );
+
+    println!("WT window {} — {} new tab(s):", new_tabs[0].0, new_tabs.len());
+    for (i, (hwnd, pid)) in new_tabs.iter().enumerate() {
+        println!("  Tab {}: hwnd={hwnd} shell_pid={pid}", i + 1);
+    }
+}
+
+#[test]
+#[ignore = "opens Windows Terminal with 3 tabs; run with: cargo test -- --ignored"]
+fn detect_wt_three_tabs() {
+    if !wt_available() {
+        eprintln!("wt.exe not found — skipping");
+        return;
+    }
+
+    let (new_tabs, _guard) = open_wt_tabs(3);
+
+    assert!(
+        new_tabs.len() >= 3,
+        "expected ≥3 new WT tabs, detected {} new tab(s): {:?}",
+        new_tabs.len(),
+        new_tabs,
+    );
+
+    let hwnds: std::collections::HashSet<&str> =
+        new_tabs.iter().map(|(h, _)| h.as_str()).collect();
+    assert_eq!(hwnds.len(), 1, "tabs spread across windows: {:?}", hwnds);
+
+    println!("WT window {} — {} new tab(s):", new_tabs[0].0, new_tabs.len());
+    for (i, (_, pid)) in new_tabs.iter().enumerate() {
+        println!("  Tab {}: shell_pid={pid}", i + 1);
+    }
+}
+
+#[test]
+#[ignore = "opens Windows Terminal; verifies each tab has a shell_pid; run with: cargo test -- --ignored"]
+fn detect_wt_tabs_have_shell_pids() {
+    if !wt_available() {
+        eprintln!("wt.exe not found — skipping");
+        return;
+    }
+
+    let (new_tabs, _guard) = open_wt_tabs(2);
+
+    assert!(
+        !new_tabs.is_empty(),
+        "no new WT tabs detected after opening WT"
+    );
+
+    for (i, (_, pid)) in new_tabs.iter().enumerate() {
+        assert!(*pid > 0, "tab {} has shell_pid=0", i + 1);
+    }
+}
+
+// ── Windows Terminal focus tests ──────────────────────────────────────────────
+
+#[tokio::test]
+#[ignore = "opens Windows Terminal with 2 tabs and cycles focus; run with: cargo test -- --ignored"]
+async fn focus_wt_two_tabs() {
+    if !wt_available() {
+        eprintln!("wt.exe not found — skipping");
+        return;
+    }
+
+    let (new_tabs, _guard) = open_wt_tabs(2);
+
+    assert!(
+        new_tabs.len() >= 2,
+        "expected ≥2 new WT tabs to focus, got {}: {:?}",
+        new_tabs.len(),
+        new_tabs,
+    );
+
+    // Forward pass then backward pass — exercises switching in both directions.
+    let order: Vec<usize> = (0..new_tabs.len())
+        .chain((0..new_tabs.len()).rev())
+        .collect();
+
+    for idx in order {
+        let (hwnd, shell_pid) = &new_tabs[idx];
+        println!("Focusing WT hwnd={hwnd} shell_pid={shell_pid}");
+        super::windows_terminal::focus(hwnd, Some(&shell_pid.to_string()))
+            .await
+            .expect("windows_terminal::focus() returned Err");
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
 // ── Focus tests ───────────────────────────────────────────────────────────────
 
 #[tokio::test]
