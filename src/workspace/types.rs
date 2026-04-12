@@ -15,8 +15,15 @@ impl InspectorOutput {
     /// Populate `uri` fields on all leaf items.
     pub fn populate_uris(&mut self) {
         for term in &mut self.terminals {
-            let app = term.app.to_lowercase();
-            let is_windows_terminal = app == "windows terminal";
+            let app_lower = term.app.to_lowercase();
+            let is_windows_terminal = app_lower == "windows terminal";
+            // Use the URI slug for Windows Terminal ("windows-terminal") so that
+            // URIs from detect() and locate() share the same format.
+            let app_slug = if is_windows_terminal {
+                "windows-terminal".to_string()
+            } else {
+                app_lower
+            };
             for win in &mut term.windows {
                 for (i, tab) in win.tabs.iter_mut().enumerate() {
                     // For Windows Terminal, use the shell PID as the tab identifier so
@@ -31,7 +38,7 @@ impl InspectorOutput {
                     };
                     tab.uri = Some(format!(
                         "workspace://{}/window:{}/tab:{}",
-                        app, win.id, tab_id
+                        app_slug, win.id, tab_id
                     ));
                 }
             }

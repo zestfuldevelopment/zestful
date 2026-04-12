@@ -1,19 +1,27 @@
-//! Windows Terminal detection and focus (Windows only).
+//! `zestful inspect` — Windows Terminal detection and focus (Windows only).
 //!
-//! Detection uses EnumWindows (C# P/Invoke) to find Windows Terminal top-level windows,
-//! then Windows UI Automation to enumerate the individual tabs within each window.
-//! Each tab's shell PID is determined by matching the tab's position (in UI Automation
-//! order) to the WT process's direct child processes sorted by creation time.
+//! Detection enumerates `PseudoConsoleWindow` top-level windows whose Win32
+//! owner (`GetParent`) is the WT frame HWND (`CASCADIA_HOSTING_WINDOW_CLASS`).
+//! Each such window is owned by the shell process for that tab
+//! (`GetWindowThreadProcessId`).  Sorting those shell PIDs by process creation
+//! time (+ ProcessId as a stable tiebreaker) reproduces the left-to-right tab
+//! order shown in the UI.
 //!
-//! Focus uses the shell PID to find the correct tab at focus time: it re-queries the
-//! child processes of the WT process sorted by creation time, finds the index of the
-//! target PID, and uses that index to activate the corresponding tab via
-//! UI Automation SelectionItemPattern (falling back to InvokePattern).
-//! This is robust to tab reordering by drag because the PID is stable whereas the
-//! positional index changes.
-//! AttachThreadInput + SetForegroundWindow is used to raise the window, which is
-//! required on Windows 11 where SetForegroundWindow alone is blocked for background
-//! processes.
+//! This approach works for both ordinary tabs (shell is a direct child of the
+//! WT process) and "default terminal" (defterm) tabs (shell was spawned by
+//! explorer or another process and captured by WT) — in both cases WT creates
+//! a `PseudoConsoleWindow` owned by its frame HWND, and the owning process is
+//! always the actual interactive shell, never an intermediate like
+//! `OpenConsole.exe`.
+//!
+//! Focus re-derives the tab index at call time by repeating the same
+//! PseudoConsoleWindow enumeration and sort, then activates the matching
+//! `TabItem` via UI Automation `SelectionItemPattern` (falling back to
+//! `InvokePattern`).  Using the shell PID as the stable tab identity means
+//! focus is robust to the user reordering tabs by drag.
+//! `AttachThreadInput` + `SetForegroundWindow` is used to raise the window,
+//! which is required on Windows 11 where `SetForegroundWindow` alone is
+//! blocked for background processes.
 
 use anyhow::Result;
 use std::process::Command;
@@ -28,68 +36,87 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
-public class ZestfulWTEnum {
+public class ZestfulWTDetect {
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lp);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int max);
-    public static List<string> FindWindows(uint[] pids) {
-        var pidSet = new HashSet<uint>(pids);
+    [DllImport("user32.dll")] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
+    [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr hWnd);
+
+    // Returns "hwnd|wtPid|title" for each visible CASCADIA_HOSTING_WINDOW_CLASS window.
+    public static List<string> FindFrames(uint[] wtPids) {
+        var pidSet = new HashSet<uint>(wtPids);
         var results = new List<string>();
         EnumWindows((hWnd, lp) => {
             if (!IsWindowVisible(hWnd)) return true;
             uint pid; GetWindowThreadProcessId(hWnd, out pid);
             if (!pidSet.Contains(pid)) return true;
-            int len = GetWindowTextLength(hWnd);
-            if (len == 0) return true;
-            var sb = new StringBuilder(len + 1);
-            GetWindowText(hWnd, sb, sb.Capacity);
-            results.Add(((long)hWnd).ToString() + "|" + pid.ToString() + "|" + sb.ToString());
+            var cls = new StringBuilder(64);
+            GetClassName(hWnd, cls, cls.Capacity);
+            if (cls.ToString() != "CASCADIA_HOSTING_WINDOW_CLASS") return true;
+            var title = new StringBuilder(256);
+            GetWindowText(hWnd, title, title.Capacity);
+            results.Add((long)hWnd + "|" + pid + "|" + title);
+            return true;
+        }, IntPtr.Zero);
+        return results;
+    }
+
+    // Returns "hwnd|shellPid" for each PseudoConsoleWindow owned by frameHwnd.
+    public static List<string> FindPseudoConsoleWindows(long frameHwnd) {
+        var results = new List<string>();
+        EnumWindows((hWnd, lp) => {
+            if ((long)GetParent(hWnd) != frameHwnd) return true;
+            var cls = new StringBuilder(64);
+            GetClassName(hWnd, cls, cls.Capacity);
+            if (cls.ToString() != "PseudoConsoleWindow") return true;
+            uint pid; GetWindowThreadProcessId(hWnd, out pid);
+            results.Add((long)hWnd + "|" + pid);
             return true;
         }, IntPtr.Zero);
         return results;
     }
 }' } catch {}
 
-$wtPids = [uint32[]](Get-Process -Name WindowsTerminal -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id)
+$wtPids = [uint32[]](Get-Process -Name WindowsTerminal -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty Id)
 if ($wtPids.Count -eq 0) { exit }
 
-# Build a map of wtPid -> child shell PIDs sorted by process creation time.
-# The creation order approximates the original tab creation order.
 $allProcs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
-$childrenByWtPid = @{}
-foreach ($wtPid in $wtPids) {
-    $kids = @($allProcs | Where-Object { $_.ParentProcessId -eq $wtPid } | Sort-Object CreationDate, ProcessId | Select-Object -ExpandProperty ProcessId)
-    $childrenByWtPid[[uint32]$wtPid] = $kids
-}
 
 $tabCond = New-Object System.Windows.Automation.PropertyCondition(
     [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-    [System.Windows.Automation.ControlType]::TabItem
-)
+    [System.Windows.Automation.ControlType]::TabItem)
 
-# Output format: hwnd|shellPid|tabTitle
-[ZestfulWTEnum]::FindWindows($wtPids) | ForEach-Object {
-    $parts = $_ -split '\|', 3
-    $hwnd = [long]$parts[0]
-    $wtPid = [uint32]$parts[1]
-    $kids = $childrenByWtPid[$wtPid]
+# Output format: frameHwnd|shellPid|tabTitle  (one line per tab)
+[ZestfulWTDetect]::FindFrames($wtPids) | ForEach-Object {
+    $parts     = $_ -split '\|', 3
+    $frameHwnd = [long]$parts[0]
+
+    # Enumerate PseudoConsoleWindows and sort by shell process creation time.
+    # ProcessId is a stable tiebreaker when multiple tabs open simultaneously.
+    $sorted = [ZestfulWTDetect]::FindPseudoConsoleWindows($frameHwnd) | ForEach-Object {
+        $f        = $_ -split '\|', 2
+        $shellPid = [uint32]$f[1]
+        $proc     = $allProcs | Where-Object { $_.ProcessId -eq $shellPid } | Select-Object -First 1
+        [PSCustomObject]@{ ShellPid = $shellPid; Created = $proc.CreationDate }
+    } | Sort-Object Created, ShellPid
+
+    # Pair each sorted shell with the matching UI Automation TabItem for its title.
     try {
-        $ae = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$hwnd)
-        $tabs = $ae.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)
-        if ($tabs.Count -gt 0) {
-            for ($i = 0; $i -lt $tabs.Count; $i++) {
-                $shellPid = if ($kids -and $i -lt $kids.Count) { $kids[$i] } else { 0 }
-                "$hwnd|$shellPid|$($tabs[$i].Current.Name)"
-            }
-        } else {
-            $shellPid = if ($kids -and $kids.Count -gt 0) { $kids[0] } else { 0 }
-            "$hwnd|$shellPid|"
+        $ae   = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$frameHwnd)
+        # Sort by RuntimeId (last component) — assigned at tab creation time, not visual position.
+        # This makes the index stable across user drag-reorders.
+        $tabs = @($ae.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond) |
+            Sort-Object { ($_.GetRuntimeId() | Select-Object -Last 1) })
+        for ($i = 0; $i -lt $sorted.Count; $i++) {
+            $title = if ($i -lt $tabs.Count) { $tabs[$i].Current.Name } else { "" }
+            "$frameHwnd|$($sorted[$i].ShellPid)|$title"
         }
     } catch {
-        "$hwnd|0|"
+        foreach ($s in $sorted) { "$frameHwnd|$($s.ShellPid)|" }
     }
 }
 "#;
@@ -116,7 +143,7 @@ $tabCond = New-Object System.Windows.Automation.PropertyCondition(
             continue;
         }
 
-        // Format: hwnd|shellPid|tabTitle
+        // Format: frameHwnd|shellPid|tabTitle
         let parts: Vec<&str> = line.splitn(3, '|').collect();
         if parts.len() < 3 {
             continue;
@@ -179,93 +206,88 @@ fn focus_sync(window_id: &str, tab_id: Option<&str>) -> Result<()> {
         Err(_) => return Ok(()),
     };
 
-    // tab_id is the shell PID stored during detection. At focus time we re-query the
-    // WT process's direct children sorted by creation time to find the current tab
-    // index for that PID. This is robust to the user reordering tabs by drag.
+    // tab_id is the shell PID stored during detection.  At focus time we
+    // re-enumerate PseudoConsoleWindows owned by the frame and re-sort by
+    // shell process creation time to find the current tab index for that PID.
+    // This is robust to the user reordering tabs by drag.
     let shell_pid: u32 = tab_id.and_then(|t| t.parse().ok()).unwrap_or(0);
     crate::log::log("wt-focus", &format!("hwnd={} shell_pid={}", hwnd, shell_pid));
 
     let script = format!(
         r#"
 try {{ Add-Type -AssemblyName UIAutomationClient; Add-Type -AssemblyName UIAutomationTypes }} catch {{}}
-try {{ Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class ZestfulWT {{ [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h); [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p); [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f); }}' }} catch {{}}
+try {{ Add-Type -TypeDefinition '
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+public class ZestfulWTFocus {{
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lp);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    [DllImport("user32.dll")] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int max);
+    [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool f);
+
+    public static List<string> FindPseudoConsoleWindows(long frameHwnd) {{
+        var results = new List<string>();
+        EnumWindows((hWnd, lp) => {{
+            if ((long)GetParent(hWnd) != frameHwnd) return true;
+            var cls = new StringBuilder(64);
+            GetClassName(hWnd, cls, cls.Capacity);
+            if (cls.ToString() != "PseudoConsoleWindow") return true;
+            uint pid; GetWindowThreadProcessId(hWnd, out pid);
+            results.Add((long)hWnd + "|" + pid);
+            return true;
+        }}, IntPtr.Zero);
+        return results;
+    }}
+}}' }} catch {{}}
 
 $hwnd = [IntPtr]{hwnd}
-[ZestfulWT]::ShowWindow($hwnd, 9)
-$d = [uint32]0
-$fg = [ZestfulWT]::GetWindowThreadProcessId([ZestfulWT]::GetForegroundWindow(), [ref]$d)
-$tgt = [ZestfulWT]::GetWindowThreadProcessId($hwnd, [ref]$d)
-[ZestfulWT]::AttachThreadInput($fg, $tgt, $true)
-[ZestfulWT]::SetForegroundWindow($hwnd)
-[ZestfulWT]::BringWindowToTop($hwnd)
-[ZestfulWT]::AttachThreadInput($fg, $tgt, $false)
+
+# Raise the window.  AttachThreadInput is required on Windows 11 where
+# SetForegroundWindow alone is blocked for background processes.
+[ZestfulWTFocus]::ShowWindow($hwnd, 9)
+$fgThread  = [ZestfulWTFocus]::GetWindowThreadProcessId([ZestfulWTFocus]::GetForegroundWindow(), [ref]0)
+$tgtThread = [ZestfulWTFocus]::GetWindowThreadProcessId($hwnd, [ref]0)
+[ZestfulWTFocus]::AttachThreadInput($fgThread, $tgtThread, $true)
+[ZestfulWTFocus]::SetForegroundWindow($hwnd)
+[ZestfulWTFocus]::BringWindowToTop($hwnd)
+[ZestfulWTFocus]::AttachThreadInput($fgThread, $tgtThread, $false)
 
 try {{
-    $ae = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
     $tabCond = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-        [System.Windows.Automation.ControlType]::TabItem
-    )
-    $tabs = $ae.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond)
+        [System.Windows.Automation.ControlType]::TabItem)
+    $ae   = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    # Sort by RuntimeId (last component) — assigned at tab creation time, stable across drag-reorders.
+    $tabs = @($ae.FindAll([System.Windows.Automation.TreeScope]::Descendants, $tabCond) |
+        Sort-Object {{ ($_.GetRuntimeId() | Select-Object -Last 1) }})
 
-    # Resolve shell PID to a tab index.
-    #
-    # Primary strategy: sort WT's direct children by CreationDate (+ ProcessId as a
-    # stable tiebreaker for processes opened simultaneously) and use the positional
-    # index. The ProcessId tiebreaker is critical: when several tabs are opened at
-    # once their CreationDate timestamps are identical, making Sort-Object unstable
-    # across separate PowerShell invocations and causing detect/focus to disagree.
-    #
-    # Fallback when child count != tab count: Windows 11 "default terminal" (defterm)
-    # adds UI tabs whose shells are NOT direct WT children (their parent is explorer or
-    # another process), so $children.Count < $tabs.Count and the positional index lands
-    # on the wrong tab. WT helper processes (e.g. for elevation) go the other way.
-    # In either case we fall back to title-based matching: find which rank the target
-    # PID has among same-process-name WT children, then pick the N-th UI tab whose
-    # title suggests it runs that process.
     $targetPid = [uint32]{shell_pid}
-    $tabIdx = -1
+    $tabIdx    = -1
+
     if ($targetPid -gt 0) {{
-        $wtProcId = [uint32]0
-        [ZestfulWT]::GetWindowThreadProcessId($hwnd, [ref]$wtProcId) | Out-Null
-        $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$wtProcId" `
-            -ErrorAction SilentlyContinue | Sort-Object CreationDate, ProcessId)
-        $positionalIdx = -1
-        for ($ci = 0; $ci -lt $children.Count; $ci++) {{
-            if ($children[$ci].ProcessId -eq $targetPid) {{
-                $positionalIdx = $ci
-                break
-            }}
-        }}
-        if ($positionalIdx -ge 0) {{
-            $tabIdx = $positionalIdx
-            # When child and tab counts differ, try title-based correction.
-            if ($children.Count -ne $tabs.Count) {{
-                $targetName = ($children[$positionalIdx].Name -replace '\.exe$','').ToLower()
-                # Rank of target among all WT children with the same process name.
-                $sameProcKids = @($children | Where-Object {{ $_.Name -ieq $children[$positionalIdx].Name }})
-                $rank = -1
-                for ($si = 0; $si -lt $sameProcKids.Count; $si++) {{
-                    if ($sameProcKids[$si].ProcessId -eq $targetPid) {{ $rank = $si; break }}
-                }}
-                # Find the N-th UI tab (rank-th) whose title contains the process name.
-                if ($rank -ge 0) {{
-                    $matchCount = 0
-                    $correctedIdx = -1
-                    for ($ti = 0; $ti -lt $tabs.Count; $ti++) {{
-                        if ($tabs[$ti].Current.Name.ToLower() -like "*$targetName*") {{
-                            if ($matchCount -eq $rank) {{ $correctedIdx = $ti; break }}
-                            $matchCount++
-                        }}
-                    }}
-                    if ($correctedIdx -ge 0) {{ $tabIdx = $correctedIdx }}
-                }}
-            }}
+        $allProcs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+        $sorted = [ZestfulWTFocus]::FindPseudoConsoleWindows({hwnd}) | ForEach-Object {{
+            $f        = $_ -split '\|', 2
+            $shellPid = [uint32]$f[1]
+            $proc     = $allProcs | Where-Object {{ $_.ProcessId -eq $shellPid }} | Select-Object -First 1
+            [PSCustomObject]@{{ ShellPid = $shellPid; Created = $proc.CreationDate }}
+        }} | Sort-Object Created, ShellPid
+
+        for ($i = 0; $i -lt $sorted.Count; $i++) {{
+            if ($sorted[$i].ShellPid -eq $targetPid) {{ $tabIdx = $i; break }}
         }}
     }}
 
-    $dbgChildren = @($children).Count
-    [System.Console]::Error.WriteLine("children=$dbgChildren tabs=$($tabs.Count) positionalIdx=$positionalIdx tabIdx=$tabIdx")
+    [System.Console]::Error.WriteLine("pcw_count=$($sorted.Count) tabs=$($tabs.Count) tabIdx=$tabIdx")
+
     if ($tabIdx -ge 0 -and $tabIdx -lt $tabs.Count) {{
         $tab = $tabs[$tabIdx]
         try {{

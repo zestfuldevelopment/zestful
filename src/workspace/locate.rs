@@ -77,14 +77,16 @@ pub fn locate() -> Result<String> {
 
 /// On Windows, detect which Windows Terminal window/tab the current process is running in.
 ///
-/// Strategy: walk up from our own PID to find an ancestor whose parent is a WT process.
-/// That ancestor is the shell process for our tab and its PID is the stable tab identifier.
-/// This works on Windows 10 and Windows 11 when WT directly parents the shell.
+/// Strategy: build the set of all ancestor PIDs for our process, then enumerate every
+/// `PseudoConsoleWindow` owned by each WT frame (`CASCADIA_HOSTING_WINDOW_CLASS`).
+/// Each `PseudoConsoleWindow`'s owner process is the interactive shell for that tab.
+/// If that shell PID appears in our ancestor set we are running inside that tab.
 ///
-/// Fallback (Windows 11 defterm): when WT intercepts console creation at the OS level the
-/// shell's parent is `explorer.exe`, not `WindowsTerminal.exe`, so the walk never finds WT.
-/// In that case we fall back to the currently selected tab, which is correct because the
-/// tab we are running in must be selected for us to be executing.
+/// This handles both the ordinary case (shell is a direct WT child) and the Windows 11
+/// "default terminal" (defterm) case where the shell is parented to `explorer.exe` or
+/// another launcher — in both cases WT creates a `PseudoConsoleWindow` whose owner is
+/// always the actual shell, so the ancestor walk finds it correctly.
+/// Only returns `Some` when we are genuinely inside a WT tab.
 #[cfg(target_os = "windows")]
 fn find_windows_terminal() -> Option<(String, Option<u32>)> {
     let our_pid = std::process::id();
@@ -93,88 +95,80 @@ $wtPids = [uint32[]](Get-Process -Name WindowsTerminal -ErrorAction SilentlyCont
     Select-Object -ExpandProperty Id)
 if ($wtPids.Count -eq 0) {{ exit }}
 
-try {{ Add-Type -AssemblyName UIAutomationClient; Add-Type -AssemblyName UIAutomationTypes }} catch {{}}
 try {{ Add-Type -TypeDefinition '
-using System; using System.Runtime.InteropServices;
-public class ZestfulLocateWT2 {{
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Text;
+public class ZestfulLocateWT3 {{
     public delegate bool EWP(IntPtr h, IntPtr l);
     [DllImport("user32.dll")] public static extern bool EnumWindows(EWP cb, IntPtr l);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
     [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr h);
-    public static long FindHwndForPid(uint wtPid) {{
+    [DllImport("user32.dll")] public static extern int GetClassName(IntPtr h, StringBuilder sb, int n);
+    [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr h);
+
+    // Find the visible CASCADIA_HOSTING_WINDOW_CLASS frame for a WT pid.
+    public static long FindFrame(uint wtPid) {{
         long result = 0;
         EWP cb = (h, l) => {{
             if (!IsWindowVisible(h)) return true;
             uint p; GetWindowThreadProcessId(h, out p);
-            if (p == wtPid && GetWindowTextLength(h) > 0) {{ result = (long)h; return false; }}
-            return true;
+            if (p != wtPid) return true;
+            var sb = new StringBuilder(64);
+            GetClassName(h, sb, sb.Capacity);
+            if (sb.ToString() != "CASCADIA_HOSTING_WINDOW_CLASS") return true;
+            result = (long)h; return false;
         }};
         EnumWindows(cb, IntPtr.Zero);
         return result;
     }}
-}}' }} catch {{}}
 
-# Build a flat process map for fast parent lookups.
+    // Return shell PIDs for all PseudoConsoleWindows parented to frameHwnd.
+    public static List<uint> FindShellPids(long frameHwnd) {{
+        var results = new List<uint>();
+        EnumWindows((h, l) => {{
+            if ((long)GetParent(h) != frameHwnd) return true;
+            var sb = new StringBuilder(64);
+            GetClassName(h, sb, sb.Capacity);
+            if (sb.ToString() != "PseudoConsoleWindow") return true;
+            uint pid; GetWindowThreadProcessId(h, out pid);
+            results.Add(pid);
+            return true;
+        }}, IntPtr.Zero);
+        return results;
+    }}
+}}' }} catch {{ exit }}
+
+# Build a flat process map: pid -> parentPid
 $procMap = @{{}}
 Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object {{
     $procMap[[uint32]$_.ProcessId] = [uint32]$_.ParentProcessId
 }}
 
-$wtPidSet = [System.Collections.Generic.HashSet[uint32]]::new()
-foreach ($p in $wtPids) {{ $wtPidSet.Add([uint32]$p) | Out-Null }}
-
-# Walk up from our PID to find an ancestor whose parent is a WT process.
-$shellPid   = [uint32]0
-$owningWtPid = [uint32]0
+# Collect all ancestor PIDs of our process (including our own PID).
+$ancestors = [System.Collections.Generic.HashSet[uint32]]::new()
 $cur = [uint32]{our_pid}
 for ($i = 0; $i -lt 20 -and $cur -gt 1; $i++) {{
+    [void]$ancestors.Add($cur)
     $ppid = $procMap[$cur]
-    if (-not $ppid) {{ break }}
-    if ($wtPidSet.Contains($ppid)) {{
-        $shellPid    = $cur
-        $owningWtPid = $ppid
-        break
-    }}
+    if (-not $ppid -or $ppid -eq $cur) {{ break }}
     $cur = $ppid
 }}
 
-if ($shellPid -gt 0) {{
-    # Found via process tree — get the hwnd for the owning WT window.
-    $hwnd = [ZestfulLocateWT2]::FindHwndForPid($owningWtPid)
-    if ($hwnd -gt 0) {{
-        [System.Console]::Error.WriteLine("tree: shell_pid=$shellPid wt_pid=$owningWtPid hwnd=$hwnd")
-        Write-Output "$hwnd|$shellPid"
-        exit
-    }}
-}}
-
-# Fallback: Windows 11 defterm — the shell is not a direct WT child.
-# The tab we are running in must be selected, so use the selected tab's shell PID.
+# For each WT process, check if any PseudoConsoleWindow shell is our ancestor.
 foreach ($wtPid in $wtPids) {{
-    $hwnd = [ZestfulLocateWT2]::FindHwndForPid($wtPid)
-    if ($hwnd -eq 0) {{ continue }}
-    $kids = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$wtPid" -ErrorAction SilentlyContinue |
-        Sort-Object CreationDate, ProcessId | Select-Object -ExpandProperty ProcessId)
-    try {{
-        $ae   = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$hwnd)
-        $cond = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::TabItem)
-        $tabs = $ae.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
-        $selIdx = 0
-        for ($i = 0; $i -lt $tabs.Count; $i++) {{
-            try {{
-                $sel = $tabs[$i].GetCurrentPattern(
-                    [System.Windows.Automation.SelectionItemPattern]::Pattern)
-                if ($sel.Current.IsSelected) {{ $selIdx = $i; break }}
-            }} catch {{}}
+    $frameHwnd = [ZestfulLocateWT3]::FindFrame($wtPid)
+    if ($frameHwnd -eq 0) {{ continue }}
+    $shellPids = [ZestfulLocateWT3]::FindShellPids($frameHwnd)
+    foreach ($spid in $shellPids) {{
+        if ($ancestors.Contains($spid)) {{
+            [System.Console]::Error.WriteLine("pcw: frame=$frameHwnd shell_pid=$spid")
+            Write-Output "$frameHwnd|$spid"
+            exit
         }}
-        $spid = if ($kids -and $selIdx -lt $kids.Count) {{ $kids[$selIdx] }} else {{ 0 }}
-        [System.Console]::Error.WriteLine("defterm: hwnd=$hwnd sel_idx=$selIdx spid=$spid")
-        Write-Output "$hwnd|$spid"
-        exit
-    }} catch {{}}
+    }}
 }}
 "#, our_pid = our_pid);
 
