@@ -62,17 +62,44 @@ pub fn detect_all() -> Result<Vec<TerminalEmulator>> {
 
     #[cfg(target_os = "windows")]
     {
-        // Windows Terminal takes priority: if it's running, report its tabs directly and
-        // skip the classic cmd/powershell detectors to avoid duplicate entries.
-        // If WT is not running, fall back to the classic per-process detectors.
-        if let Ok(Some(t)) = windows_terminal::detect() {
-            terminals.push(t);
-        } else {
-            if let Ok(Some(t)) = cmd::detect() {
+        // Collect shell PIDs already captured by Windows Terminal so that
+        // classic detectors can skip them and avoid duplicate entries.
+        // On Windows 10 a user can have both Windows Terminal tabs and
+        // standalone classic console windows open at the same time, so we
+        // always run all three detectors rather than using an if/else.
+        let wt_pids: std::collections::HashSet<u32> =
+            match windows_terminal::detect() {
+                Ok(Some(t)) => {
+                    let pids = t
+                        .windows
+                        .iter()
+                        .flat_map(|w| w.tabs.iter())
+                        .filter_map(|tab| tab.shell_pid)
+                        .collect();
+                    terminals.push(t);
+                    pids
+                }
+                _ => std::collections::HashSet::new(),
+            };
+
+        if let Ok(Some(mut t)) = cmd::detect() {
+            t.windows.retain(|w| {
+                !w.tabs
+                    .iter()
+                    .any(|tab| tab.shell_pid.map_or(false, |p| wt_pids.contains(&p)))
+            });
+            if !t.windows.is_empty() {
                 terminals.push(t);
             }
+        }
 
-            if let Ok(Some(t)) = powershell::detect() {
+        if let Ok(Some(mut t)) = powershell::detect() {
+            t.windows.retain(|w| {
+                !w.tabs
+                    .iter()
+                    .any(|tab| tab.shell_pid.map_or(false, |p| wt_pids.contains(&p)))
+            });
+            if !t.windows.is_empty() {
                 terminals.push(t);
             }
         }
