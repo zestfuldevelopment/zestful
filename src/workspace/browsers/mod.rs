@@ -13,7 +13,7 @@ use crate::workspace::types::BrowserInstance;
 pub async fn handle_focus(app: &str, window_id: Option<&str>, tab_id: Option<&str>) -> Result<()> {
     let lower = app.to_lowercase();
     let win_id = window_id.unwrap_or("");
-    let tab_index: u32 = tab_id.and_then(|t| t.parse().ok()).unwrap_or(1);
+    let tab_index: u64 = tab_id.and_then(|t| t.parse().ok()).unwrap_or(1);
 
     if lower.contains("chrome") {
         #[cfg(target_os = "macos")]

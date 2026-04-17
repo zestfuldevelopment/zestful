@@ -73,11 +73,16 @@ end tell"#,
     }))
 }
 
-/// Focus a Chrome tab by window ID and tab index.
-pub async fn focus(window_id: &str, tab_index: u32) -> anyhow::Result<()> {
+/// Focus a Chrome tab. The `tab_id` can be either a small 1-based tab index
+/// (legacy) or the Chrome tab's unique id (matches `chrome.tabs.Tab.id` from
+/// the JS API). Values ≤ 1000 are treated as indices; larger values are
+/// treated as Chrome tab IDs and looked up within the window.
+pub async fn focus(window_id: &str, tab_id: u64) -> anyhow::Result<()> {
     let win_id: i64 = window_id.parse().unwrap_or(-1);
-    let script = format!(
-        r#"tell application "Google Chrome"
+    let script = if tab_id <= 1000 {
+        // Small number: treat as 1-based tab index
+        format!(
+            r#"tell application "Google Chrome"
   try
     set w to window id {}
     set active tab index of w to {}
@@ -86,8 +91,29 @@ pub async fn focus(window_id: &str, tab_index: u32) -> anyhow::Result<()> {
   on error
   end try
 end tell"#,
-        win_id, tab_index
-    );
+            win_id, tab_id
+        )
+    } else {
+        // Large number: look up tab by its unique id within the window
+        format!(
+            r#"tell application "Google Chrome"
+  try
+    set w to window id {}
+    set tabList to tabs of w
+    repeat with i from 1 to count of tabList
+      if id of (item i of tabList) is {} then
+        set active tab index of w to i
+        exit repeat
+      end if
+    end repeat
+    set index of w to 1
+    activate
+  on error
+  end try
+end tell"#,
+            win_id, tab_id
+        )
+    };
 
     tokio::task::spawn_blocking(move || {
         let _ = std::process::Command::new("osascript")
