@@ -67,6 +67,7 @@ async fn run_server() -> Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/focus", post(handle_focus))
+        .route("/inspect", get(handle_inspect))
         .layer(DefaultBodyLimit::max(16_384)); // 16 KB
 
     let port = config::daemon_port();
@@ -90,6 +91,25 @@ async fn health() -> impl IntoResponse {
     Json(StatusResponse {
         status: "ok".to_string(),
     })
+}
+
+/// Return the same JSON that `zestful inspect` produces. Runs in the daemon
+/// process so it inherits whatever Apple Events / TCC permissions the
+/// terminal that launched the daemon already has — avoids the per-process
+/// permission prompts that would otherwise be needed for each subprocess.
+async fn handle_inspect() -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(|| crate::workspace::inspect_all()).await;
+    match result {
+        Ok(Ok(output)) => (StatusCode::OK, Json(serde_json::to_value(&output).unwrap_or_default())),
+        Ok(Err(e)) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("join error: {e}")})),
+        ),
+    }
 }
 
 async fn handle_focus(

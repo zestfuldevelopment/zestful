@@ -90,7 +90,15 @@ impl InspectorOutput {
         }
 
         for ide in &mut self.ides {
-            let app = ide.app.to_lowercase();
+            // Slug the app name: "Visual Studio Code" → "vscode", "Xcode" → "xcode"
+            let app = match ide.app.as_str() {
+                "Visual Studio Code" => "vscode".to_string(),
+                "Xcode" => "xcode".to_string(),
+                "Cursor" => "cursor".to_string(),
+                "Windsurf" => "windsurf".to_string(),
+                "Zed" => "zed".to_string(),
+                other => other.to_lowercase().replace(' ', "-"),
+            };
             for project in &mut ide.projects {
                 project.uri = Some(format!(
                     "workspace://{}/project:{}",
