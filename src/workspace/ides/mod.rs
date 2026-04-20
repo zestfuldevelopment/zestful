@@ -3,7 +3,7 @@
 #[cfg(target_os = "macos")]
 mod xcode;
 #[cfg(target_os = "macos")]
-mod vscode_family;
+pub mod vscode_family;
 
 use anyhow::Result;
 use crate::workspace::types::IdeInstance;
@@ -22,4 +22,40 @@ pub fn detect_all() -> Result<Vec<IdeInstance>> {
     }
 
     Ok(ides)
+}
+
+/// Dispatch focus to the right IDE handler. Called from the daemon when a
+/// `workspace://<ide>/project:<name>` URI arrives.
+pub async fn handle_focus(app: &str, project_id: Option<&str>) -> Result<()> {
+    let lower = app.to_lowercase();
+
+    #[cfg(target_os = "macos")]
+    {
+        if lower == "vscode" || lower.contains("visual studio code") {
+            return vscode_family::focus(Family::VSCode, project_id).await;
+        }
+        if lower == "cursor" {
+            return vscode_family::focus(Family::Cursor, project_id).await;
+        }
+        if lower == "windsurf" {
+            return vscode_family::focus(Family::Windsurf, project_id).await;
+        }
+        if lower == "xcode" {
+            return xcode_focus(project_id).await;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (lower, project_id);
+
+    // Generic fallback: just activate the app by name.
+    crate::workspace::uri::activate_generic(app).await
+}
+
+#[cfg(target_os = "macos")]
+pub use vscode_family::Family;
+
+#[cfg(target_os = "macos")]
+async fn xcode_focus(_project_id: Option<&str>) -> Result<()> {
+    // No per-project Xcode focus yet — just activate the app.
+    crate::workspace::uri::activate_generic("Xcode").await
 }

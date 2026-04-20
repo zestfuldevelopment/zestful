@@ -6,7 +6,7 @@
 
 use anyhow::{bail, Result};
 
-use crate::workspace::{browsers, multiplexers, terminals, uri};
+use crate::workspace::{browsers, ides, multiplexers, terminals, uri};
 
 /// Execute the `focus` command.
 pub fn run(
@@ -26,6 +26,7 @@ pub fn run(
             app,
             window_id,
             tab_id,
+            project_id: None,
             shelldon: None,
             tmux: None,
         }
@@ -39,7 +40,16 @@ pub fn run(
         let is_browser = app_lower.contains("chrome")
             || app_lower.contains("safari")
             || app_lower.contains("firefox");
-        let focus_result = if is_browser {
+        let is_ide = parsed.project_id.is_some()
+            || app_lower == "xcode"
+            || app_lower == "vscode"
+            || app_lower.contains("visual studio code")
+            || app_lower == "cursor"
+            || app_lower == "windsurf"
+            || app_lower == "zed";
+        let focus_result = if is_ide {
+            ides::handle_focus(&parsed.app, parsed.project_id.as_deref()).await
+        } else if is_browser {
             browsers::handle_focus(
                 &parsed.app,
                 parsed.window_id.as_deref(),

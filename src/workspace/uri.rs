@@ -20,6 +20,9 @@ pub struct ParsedTerminalUri {
     pub app: String,
     pub window_id: Option<String>,
     pub tab_id: Option<String>,
+    /// IDE project name from a `project:NAME` segment, e.g. "shelldon" in
+    /// `workspace://vscode/project:shelldon`.
+    pub project_id: Option<String>,
     pub shelldon: Option<ShelldonInfo>,
     pub tmux: Option<TmuxInfo>,
 }
@@ -39,6 +42,7 @@ pub fn parse_terminal_uri(uri: &str) -> Option<ParsedTerminalUri> {
 
     let mut window_id = None;
     let mut tab_id = None;
+    let mut project_id: Option<String> = None;
     let mut shelldon = None;
 
     let mut in_shelldon = false;
@@ -88,6 +92,8 @@ pub fn parse_terminal_uri(uri: &str) -> Option<ParsedTerminalUri> {
             window_id = Some(id.to_string());
         } else if let Some(id) = part.strip_prefix("tab:") {
             tab_id = Some(id.to_string());
+        } else if let Some(id) = part.strip_prefix("project:") {
+            project_id = Some(id.to_string());
         }
     }
 
@@ -124,6 +130,7 @@ pub fn parse_terminal_uri(uri: &str) -> Option<ParsedTerminalUri> {
         app,
         window_id,
         tab_id,
+        project_id,
         shelldon,
         tmux,
     })

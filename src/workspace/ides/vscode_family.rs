@@ -29,6 +29,148 @@ const APPS: &[AppSpec] = &[
     AppSpec { process_name: "Windsurf", support_dir: "Windsurf", display: "Windsurf" },
 ];
 
+/// Which VS Code-family editor to target for focus.
+#[derive(Copy, Clone, Debug)]
+pub enum Family {
+    VSCode,
+    Cursor,
+    Windsurf,
+}
+
+impl Family {
+    fn cli_name(self) -> &'static str {
+        match self {
+            Family::VSCode => "code",
+            Family::Cursor => "cursor",
+            Family::Windsurf => "windsurf",
+        }
+    }
+    fn app_bundle_name(self) -> &'static str {
+        match self {
+            Family::VSCode => "Visual Studio Code",
+            Family::Cursor => "Cursor",
+            Family::Windsurf => "Windsurf",
+        }
+    }
+    fn support_dir(self) -> &'static str {
+        match self {
+            Family::VSCode => "Code",
+            Family::Cursor => "Cursor",
+            Family::Windsurf => "Windsurf",
+        }
+    }
+    fn process_name(self) -> &'static str {
+        match self {
+            Family::VSCode => "Code",
+            Family::Cursor => "Cursor",
+            Family::Windsurf => "Windsurf",
+        }
+    }
+}
+
+/// Focus a VS Code-family project window. If `project_id` is given, resolve
+/// its path from the editor's workspaceStorage and reopen (the editor will
+/// promote the matching window to the front); if not, just activate the app.
+pub async fn focus(family: Family, project_id: Option<&str>) -> Result<()> {
+    let project_id_owned = project_id.map(String::from);
+    let family_move = family;
+    tokio::task::spawn_blocking(move || {
+        focus_sync(family_move, project_id_owned.as_deref())
+    })
+    .await??;
+    Ok(())
+}
+
+fn focus_sync(family: Family, project_id: Option<&str>) -> Result<()> {
+    if let Some(id) = project_id {
+        if let Some(path) = lookup_project_path(family, id) {
+            let cli = find_cli(family);
+            // Try the CLI first (handles window reuse cleanly); fall back to
+            // `open -a <App> <path>` if the CLI isn't installed on PATH.
+            if let Some(cli_path) = cli {
+                let ok = Command::new(&cli_path)
+                    .args(["--reuse-window", &path])
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                if ok { return Ok(()); }
+            }
+            let _ = Command::new("/usr/bin/open")
+                .args(["-a", family.app_bundle_name(), &path])
+                .status();
+            return Ok(());
+        }
+    }
+    // No project id (or unresolved): just activate the app.
+    crate::workspace::uri::activate_app_sync(family.app_bundle_name());
+    Ok(())
+}
+
+/// Search well-known locations for the family's CLI binary.
+fn find_cli(family: Family) -> Option<std::path::PathBuf> {
+    let cli_name = family.cli_name();
+    let candidates: &[&str] = match family {
+        Family::VSCode => &[
+            "/usr/local/bin/code",
+            "/opt/homebrew/bin/code",
+            "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+        ],
+        Family::Cursor => &[
+            "/usr/local/bin/cursor",
+            "/opt/homebrew/bin/cursor",
+            "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+        ],
+        Family::Windsurf => &[
+            "/usr/local/bin/windsurf",
+            "/opt/homebrew/bin/windsurf",
+        ],
+    };
+    for path in candidates {
+        if std::path::Path::new(path).exists() {
+            return Some(std::path::PathBuf::from(path));
+        }
+    }
+    // Fallback: rely on PATH via `which`
+    Command::new("/usr/bin/which")
+        .arg(cli_name)
+        .output()
+        .ok()
+        .and_then(|o| {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.is_empty() { None } else { Some(std::path::PathBuf::from(s)) }
+        })
+}
+
+/// Look up the workspace folder path for a given project name by scanning
+/// the editor's workspaceStorage directories.
+fn lookup_project_path(family: Family, project_name: &str) -> Option<String> {
+    let home = home_dir()?;
+    let storage = home
+        .join("Library/Application Support")
+        .join(family.support_dir())
+        .join("User/workspaceStorage");
+    let entries = fs::read_dir(&storage).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let ws_json = path.join("workspace.json");
+        let Ok(contents) = fs::read_to_string(&ws_json) else { continue };
+        let Ok(parsed) = serde_json::from_str::<WorkspaceFile>(&contents) else { continue };
+        let Some(uri) = parsed.folder.or(parsed.workspace) else { continue };
+        let local = uri.strip_prefix("file://").unwrap_or(&uri);
+        let decoded = urlencoding_decode(local);
+        let name = PathBuf::from(&decoded)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if name == project_name {
+            return Some(decoded);
+        }
+    }
+    // Suppress unused-variable warning on non-macOS
+    let _ = family.process_name();
+    None
+}
+
 pub fn detect_all() -> Result<Vec<IdeInstance>> {
     let mut out = Vec::new();
     for spec in APPS {
