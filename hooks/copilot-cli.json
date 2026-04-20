@@ -1,10 +1,6 @@
 {
   "hooks": {
-    "task-completed": {
-      "command": "zestful notify --agent \"copilot:$(basename $PWD)\" --message 'Task completed'"
-    },
-    "error": {
-      "command": "zestful notify --agent \"copilot:$(basename $PWD)\" --message 'Error occurred' --severity urgent"
-    }
+    "task-completed": { "command": "zestful hook" },
+    "error": { "command": "zestful hook" }
   }
 }

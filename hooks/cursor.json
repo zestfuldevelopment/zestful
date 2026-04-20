@@ -1,12 +1,6 @@
 {
   "hooks": [
-    {
-      "event": "stop",
-      "command": "zestful notify --agent \"cursor:$(basename $PWD)\" --message 'Waiting for your input'"
-    },
-    {
-      "event": "start",
-      "command": "zestful notify --agent \"cursor:$(basename $PWD)\" --message 'Working...' --severity info --no-push"
-    }
+    { "event": "stop",  "command": "zestful hook" },
+    { "event": "start", "command": "zestful hook" }
   ]
 }

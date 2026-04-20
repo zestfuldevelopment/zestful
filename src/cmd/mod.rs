@@ -2,6 +2,7 @@
 
 pub mod daemon;
 pub mod focus;
+pub mod hook;
 pub mod inspect;
 pub mod notify;
 pub mod ssh;

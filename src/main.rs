@@ -6,6 +6,7 @@
 
 mod cmd;
 mod config;
+pub mod hooks;
 pub mod log;
 pub mod workspace;
 
@@ -103,13 +104,29 @@ enum Commands {
         #[arg(long, default_value = "terminal")]
         app: String,
     },
+
+    /// Universal agent hook entry. Reads a JSON payload on stdin, detects
+    /// the invoking agent, and sends the appropriate Zestful notification.
+    /// Designed as a drop-in hook command for Claude Code, Codex CLI, etc.
+    Hook {
+        /// Override detected agent kind (e.g. "claude-code", "codex").
+        #[arg(long)]
+        agent: Option<String>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Auto-start daemon for commands that need it
-    if !matches!(cli.command, Commands::Daemon | Commands::Inspect { .. } | Commands::Focus { .. } | Commands::TestFocus { .. }) {
+    if !matches!(
+        cli.command,
+        Commands::Daemon
+            | Commands::Inspect { .. }
+            | Commands::Focus { .. }
+            | Commands::TestFocus { .. }
+            | Commands::Hook { .. }
+    ) {
         config::ensure_daemon();
     }
 
@@ -136,5 +153,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Inspect { command, pretty } => cmd::inspect::run(command, pretty),
 
         Commands::TestFocus { app } => cmd::test_focus::run(Some(app)),
+
+        Commands::Hook { agent } => cmd::hook::run(agent),
     }
 }
