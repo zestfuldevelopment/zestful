@@ -6,9 +6,11 @@
 
 pub mod device;
 pub mod envelope;
+pub mod map;
 pub mod payload;
 pub mod preview;
 
 pub use device::device_id;
 pub use envelope::{Context, Correlation, Envelope, Subapplication};
+pub use map::map_hook_payload;
 pub use payload::Payload;
