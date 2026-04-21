@@ -4,4 +4,8 @@
 //! the Rust daemon on `127.0.0.1:21548/events`. Best-effort: errors never
 //! propagate to callers.
 
+pub mod envelope;
 pub mod preview;
+
+#[allow(unused_imports)]
+pub use envelope::{Context, Correlation, Envelope, Subapplication};
