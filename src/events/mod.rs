@@ -5,7 +5,8 @@
 //! propagate to callers.
 
 pub mod envelope;
+pub mod payload;
 pub mod preview;
 
-#[allow(unused_imports)]
 pub use envelope::{Context, Correlation, Envelope, Subapplication};
+pub use payload::Payload;
