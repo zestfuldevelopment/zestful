@@ -511,4 +511,38 @@ mod tests {
         let expected_hash = sha256_hex(&long_prompt);
         assert_eq!(envs[0].payload["prompt_hash"], expected_hash);
     }
+
+    #[test]
+    fn mapped_envelope_passes_spec_validator_rules() {
+        // Round-trip: map_hook_payload output → serde_json::to_value →
+        // the same envelope shape rules that cmd::daemon::validate_envelope
+        // enforces. Catches field-name drift between emitter and daemon
+        // without a cross-module dep.
+        let payload = json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess_drift",
+        });
+        let envs = map_hook_payload(AgentKind::ClaudeCode, &payload);
+        assert_eq!(envs.len(), 1);
+        let v = serde_json::to_value(&envs[0]).unwrap();
+        let obj = v.as_object().expect("envelope is object");
+
+        // Every field listed in the spec §Envelope field rules table as
+        // required must be present on the emitter-produced JSON.
+        for required in [
+            "id", "schema", "ts", "seq", "host", "os_user",
+            "device_id", "source", "source_pid", "type",
+        ] {
+            assert!(
+                obj.contains_key(required),
+                "emitter output missing required field: {}",
+                required
+            );
+        }
+
+        // Envelope-level shape invariants the daemon validator checks.
+        assert_eq!(obj["schema"].as_u64(), Some(1));
+        assert_eq!(obj["id"].as_str().map(|s| s.len()), Some(26));
+        assert!(obj["type"].is_string());
+    }
 }

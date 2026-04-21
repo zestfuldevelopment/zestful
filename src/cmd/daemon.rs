@@ -47,15 +47,6 @@ struct EventsResponse {
     accepted: usize,
 }
 
-#[derive(Serialize)]
-struct EventsError {
-    error: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    detail: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    event_index: Option<usize>,
-}
-
 /// Start the focus daemon. Creates a tokio runtime and runs the axum server.
 pub fn run() -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
@@ -340,6 +331,7 @@ fn validate_envelope(v: &serde_json::Value) -> std::result::Result<(), String> {
         "id",
         "schema",
         "ts",
+        "seq",
         "host",
         "os_user",
         "device_id",
