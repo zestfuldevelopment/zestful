@@ -12,7 +12,11 @@ pub fn run(app: Option<String>) -> Result<()> {
         return Ok(());
     }
 
-    println!("Found {} tab(s) matching \"{}\". Cycling through...", uris.len(), filter);
+    println!(
+        "Found {} tab(s) matching \"{}\". Cycling through...",
+        uris.len(),
+        filter
+    );
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {

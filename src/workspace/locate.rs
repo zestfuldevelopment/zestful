@@ -104,7 +104,8 @@ pub fn locate() -> Result<String> {
 #[cfg(target_os = "windows")]
 fn find_windows_terminal() -> Option<(String, Option<u32>)> {
     let our_pid = std::process::id();
-    let script = format!(r#"
+    let script = format!(
+        r#"
 $wtPids = [uint32[]](Get-Process -Name WindowsTerminal -ErrorAction SilentlyContinue |
     Select-Object -ExpandProperty Id)
 if ($wtPids.Count -eq 0) {{ exit }}
@@ -184,7 +185,9 @@ foreach ($wtPid in $wtPids) {{
         }}
     }}
 }}
-"#, our_pid = our_pid);
+"#,
+        our_pid = our_pid
+    );
 
     let output = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
@@ -212,9 +215,16 @@ foreach ($wtPid in $wtPids) {{
 
     let hwnd = parts[0].trim().to_string();
     let shell_pid: u32 = parts[1].trim().parse().unwrap_or(0);
-    let tab_id = if shell_pid != 0 { Some(shell_pid) } else { None };
+    let tab_id = if shell_pid != 0 {
+        Some(shell_pid)
+    } else {
+        None
+    };
 
-    crate::log::log("wt-locate", &format!("result: hwnd={} shell_pid={:?}", hwnd, tab_id));
+    crate::log::log(
+        "wt-locate",
+        &format!("result: hwnd={} shell_pid={:?}", hwnd, tab_id),
+    );
     Some((hwnd, tab_id))
 }
 
@@ -227,7 +237,8 @@ fn find_classic_console() -> Option<(String, String)> {
     // Pass our own PID explicitly — do NOT use $PID inside the script, which is the
     // spawned powershell.exe process and would match itself as "powershell" immediately.
     let our_pid = std::process::id();
-    let script = format!(r#"
+    let script = format!(
+        r#"
 $procMap = @{{}}
 Get-CimInstance Win32_Process | ForEach-Object {{
     $procMap[[uint32]$_.ProcessId] = [PSCustomObject]@{{ ppid = [uint32]$_.ParentProcessId; name = $_.Name.ToLower() }}
@@ -240,7 +251,8 @@ for ($i = 0; $i -lt 10 -and $cur -gt 1; $i++) {{
     if ($entry.name -eq 'powershell.exe' -or $entry.name -eq 'pwsh.exe') {{ Write-Output "powershell|$cur"; exit }}
     $cur = $entry.ppid
 }}
-"#);
+"#
+    );
 
     let output = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
@@ -307,7 +319,11 @@ fn find_terminal_for_tty(tty: &str) -> Result<Option<(String, String, Option<u32
     let tty_to_match = if std::env::var("TMUX").is_ok() {
         find_tmux_client_tty().unwrap_or_else(|| tty.to_string())
     } else if let Ok(client_tty) = std::env::var("SHELLDON_CLIENT_TTY") {
-        if !client_tty.is_empty() { client_tty } else { tty.to_string() }
+        if !client_tty.is_empty() {
+            client_tty
+        } else {
+            tty.to_string()
+        }
     } else {
         tty.to_string()
     };
@@ -411,10 +427,7 @@ fn find_shelldon_tty() -> Option<String> {
         let comm = parts[1].trim();
         let tty = parts[2].trim();
 
-        if (comm.contains("shelldon") || comm == "-shelldon")
-            && tty != "??"
-            && !tty.is_empty()
-        {
+        if (comm.contains("shelldon") || comm == "-shelldon") && tty != "??" && !tty.is_empty() {
             return Some(format!("/dev/{}", tty));
         }
 
@@ -440,8 +453,12 @@ enum VSCodeMatch {
 #[cfg(target_os = "macos")]
 fn detect_vscode_family_terminal() -> Option<(String, String)> {
     match detect_vscode_family()? {
-        VSCodeMatch::Terminal { slug, terminal_id } => Some((slug, format!("terminal:{}", terminal_id))),
-        VSCodeMatch::Project { slug, project_name } => Some((slug, format!("project:{}", project_name))),
+        VSCodeMatch::Terminal { slug, terminal_id } => {
+            Some((slug, format!("terminal:{}", terminal_id)))
+        }
+        VSCodeMatch::Project { slug, project_name } => {
+            Some((slug, format!("project:{}", project_name)))
+        }
     }
 }
 
@@ -488,8 +505,12 @@ fn detect_vscode_family() -> Option<VSCodeMatch> {
         if path.extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
-        let Ok(contents) = std::fs::read_to_string(&path) else { continue };
-        let Ok(state) = serde_json::from_str::<StateFile>(&contents) else { continue };
+        let Ok(contents) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(state) = serde_json::from_str::<StateFile>(&contents) else {
+            continue;
+        };
         let app = state.app_name.unwrap_or_default();
         let slug = match app.as_str() {
             "Cursor" => "cursor".to_string(),
@@ -497,8 +518,14 @@ fn detect_vscode_family() -> Option<VSCodeMatch> {
             _ => "vscode".to_string(),
         };
         if let Some(wpid) = state.window_pid {
-            let project_name = state.workspace_folder.as_deref()
-                .and_then(|p| std::path::Path::new(p).file_name().map(|s| s.to_string_lossy().into_owned()))
+            let project_name = state
+                .workspace_folder
+                .as_deref()
+                .and_then(|p| {
+                    std::path::Path::new(p)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                })
                 .unwrap_or_default();
             if !project_name.is_empty() {
                 window_by_pid.insert(wpid, (slug.clone(), project_name));
@@ -523,20 +550,26 @@ fn detect_vscode_family() -> Option<VSCodeMatch> {
     for _ in 0..30 {
         chain.push(current);
         if let Some((slug, id)) = term_by_pid.get(&current) {
-            crate::log::log("locate", &format!(
-                "vscode-family: matched terminal shellPid={} → {}/{}",
-                current, slug, id
-            ));
+            crate::log::log(
+                "locate",
+                &format!(
+                    "vscode-family: matched terminal shellPid={} → {}/{}",
+                    current, slug, id
+                ),
+            );
             return Some(VSCodeMatch::Terminal {
                 slug: slug.clone(),
                 terminal_id: id.clone(),
             });
         }
         if let Some((slug, name)) = window_by_pid.get(&current) {
-            crate::log::log("locate", &format!(
-                "vscode-family: matched extension-host windowPid={} → {}/project:{}",
-                current, slug, name
-            ));
+            crate::log::log(
+                "locate",
+                &format!(
+                    "vscode-family: matched extension-host windowPid={} → {}/project:{}",
+                    current, slug, name
+                ),
+            );
             return Some(VSCodeMatch::Project {
                 slug: slug.clone(),
                 project_name: name.clone(),
@@ -556,12 +589,99 @@ fn detect_vscode_family() -> Option<VSCodeMatch> {
         }
         current = ppid;
     }
-    crate::log::log("locate", &format!(
-        "vscode-family: no match. start={} chain={:?} terms={:?} windows={:?}",
-        start_pid, chain,
-        term_by_pid.keys().collect::<Vec<_>>(),
-        window_by_pid.keys().collect::<Vec<_>>()
-    ));
+    crate::log::log(
+        "locate",
+        &format!(
+            "vscode-family: no match. start={} chain={:?} terms={:?} windows={:?}",
+            start_pid,
+            chain,
+            term_by_pid.keys().collect::<Vec<_>>(),
+            window_by_pid.keys().collect::<Vec<_>>()
+        ),
+    );
+    None
+}
+
+/// Scan the Zestful VS Code extension's state files for any window that is
+/// reporting an active Codex conversation tab. Returns the editor slug and
+/// workspace-folder basename of the best match (preferring a window where
+/// the Codex tab is the active tab over one where it is merely open).
+///
+/// Used by `zestful hook` to correlate a Codex hook — which always fires
+/// from the shared `Codex.app` daemon regardless of UI surface — back to
+/// the VS Code-family window the user is actually driving it from.
+#[cfg(target_os = "macos")]
+pub fn find_active_codex_editor() -> Option<(String, String)> {
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct StateFile {
+        #[serde(rename = "appName")]
+        app_name: Option<String>,
+        #[serde(rename = "workspaceFolder")]
+        workspace_folder: Option<String>,
+        codex: Option<CodexState>,
+    }
+    #[derive(Deserialize)]
+    struct CodexState {
+        #[serde(rename = "tabOpen")]
+        tab_open: Option<bool>,
+        #[serde(rename = "tabActive")]
+        tab_active: Option<bool>,
+    }
+
+    let dir = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)?
+        .join(".config/zestful/vscode");
+    let entries = std::fs::read_dir(&dir).ok()?;
+
+    let mut best: Option<(bool, String, String)> = None; // (tab_active, slug, project)
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(contents) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(state) = serde_json::from_str::<StateFile>(&contents) else {
+            continue;
+        };
+        let Some(codex) = state.codex else { continue };
+        let tab_active = codex.tab_active.unwrap_or(false);
+        let tab_open = codex.tab_open.unwrap_or(false);
+        if !tab_open && !tab_active {
+            continue;
+        }
+        let slug = match state.app_name.as_deref().unwrap_or("") {
+            "Cursor" => "cursor",
+            "Windsurf" => "windsurf",
+            _ => "vscode",
+        };
+        let project = state
+            .workspace_folder
+            .as_deref()
+            .and_then(|p| {
+                std::path::Path::new(p)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+            })
+            .unwrap_or_default();
+        if project.is_empty() {
+            continue;
+        }
+        let candidate = (tab_active, slug.to_string(), project);
+        best = match best {
+            None => Some(candidate),
+            Some(prev) if !prev.0 && candidate.0 => Some(candidate), // prefer active
+            other => other,
+        };
+    }
+    best.map(|(_, slug, project)| (slug, project))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn find_active_codex_editor() -> Option<(String, String)> {
     None
 }
 
@@ -667,8 +787,7 @@ fn detect_zellij() -> Result<Option<Vec<String>>> {
 
     if let Ok(o) = output {
         if o.status.success() {
-            let raw: Vec<serde_json::Value> =
-                serde_json::from_slice(&o.stdout).unwrap_or_default();
+            let raw: Vec<serde_json::Value> = serde_json::from_slice(&o.stdout).unwrap_or_default();
             for p in &raw {
                 let focused = p
                     .get("FOCUSED")

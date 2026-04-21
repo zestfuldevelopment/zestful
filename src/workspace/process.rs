@@ -116,10 +116,7 @@ pub fn query_tasklist(exe_name: &str) -> Vec<(u32, String)> {
             continue;
         }
 
-        let stripped = line
-            .strip_prefix('"')
-            .unwrap_or(line)
-            .trim_end_matches('"');
+        let stripped = line.strip_prefix('"').unwrap_or(line).trim_end_matches('"');
         let fields: Vec<&str> = stripped.split("\",\"").collect();
 
         if fields.len() < 9 {
@@ -219,10 +216,7 @@ pub fn find_pids_by_name(name: &str) -> Vec<u32> {
                 continue;
             }
             // CSV: "ImageName","PID",...
-            let stripped = line
-                .strip_prefix('"')
-                .unwrap_or(line)
-                .trim_end_matches('"');
+            let stripped = line.strip_prefix('"').unwrap_or(line).trim_end_matches('"');
             let fields: Vec<&str> = stripped.split("\",\"").collect();
             if fields.len() >= 2 {
                 if let Ok(pid) = fields[1].parse::<u32>() {
@@ -241,9 +235,7 @@ pub fn find_pids_by_name(name: &str) -> Vec<u32> {
             r#"tell application "System Events" to get the unix id of every process whose name is "{}""#,
             name
         );
-        let output = Command::new("osascript")
-            .args(["-e", &script])
-            .output();
+        let output = Command::new("osascript").args(["-e", &script]).output();
 
         if let Ok(ref o) = output {
             if o.status.success() {
@@ -263,9 +255,7 @@ pub fn find_pids_by_name(name: &str) -> Vec<u32> {
     // Use pgrep to find processes by name (Linux and macOS fallback)
     #[cfg(not(target_os = "windows"))]
     {
-        let output = Command::new("pgrep")
-            .args(["-x", name])
-            .output();
+        let output = Command::new("pgrep").args(["-x", name]).output();
 
         let output = match output {
             Ok(o) if o.status.success() => o,

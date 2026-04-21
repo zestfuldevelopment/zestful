@@ -70,20 +70,19 @@ pub fn detect_all() -> Result<Vec<TerminalEmulator>> {
         // On Windows 10 a user can have both Windows Terminal tabs and
         // standalone classic console windows open at the same time, so we
         // always run all three detectors rather than using an if/else.
-        let wt_pids: std::collections::HashSet<u32> =
-            match windows_terminal::detect() {
-                Ok(Some(t)) => {
-                    let pids = t
-                        .windows
-                        .iter()
-                        .flat_map(|w| w.tabs.iter())
-                        .filter_map(|tab| tab.shell_pid)
-                        .collect();
-                    terminals.push(t);
-                    pids
-                }
-                _ => std::collections::HashSet::new(),
-            };
+        let wt_pids: std::collections::HashSet<u32> = match windows_terminal::detect() {
+            Ok(Some(t)) => {
+                let pids = t
+                    .windows
+                    .iter()
+                    .flat_map(|w| w.tabs.iter())
+                    .filter_map(|tab| tab.shell_pid)
+                    .collect();
+                terminals.push(t);
+                pids
+            }
+            _ => std::collections::HashSet::new(),
+        };
 
         if let Ok(Some(mut t)) = cmd::detect() {
             t.windows.retain(|w| {

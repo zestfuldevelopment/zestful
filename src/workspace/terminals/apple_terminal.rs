@@ -145,9 +145,7 @@ end tell"#,
         _ => r#"tell application "Terminal" to activate"#.to_string(),
     };
 
-    let _ = Command::new("osascript")
-        .args(["-e", &script])
-        .output();
+    let _ = Command::new("osascript").args(["-e", &script]).output();
 
     Ok(())
 }

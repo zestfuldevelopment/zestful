@@ -42,10 +42,7 @@ impl AgentKind {
     }
 }
 
-pub fn detect_agent(
-    override_kind: Option<&str>,
-    payload: &serde_json::Value,
-) -> AgentKind {
+pub fn detect_agent(override_kind: Option<&str>, payload: &serde_json::Value) -> AgentKind {
     if let Some(s) = override_kind {
         if let Some(kind) = from_slug(s) {
             return kind;
@@ -129,11 +126,7 @@ fn detect_by_parent_process() -> Option<AgentKind> {
 
 fn match_process_name(comm: &str) -> Option<AgentKind> {
     // comm can be a path like "/usr/local/bin/claude" — grab the basename.
-    let basename = comm
-        .rsplit('/')
-        .next()
-        .unwrap_or(comm)
-        .to_ascii_lowercase();
+    let basename = comm.rsplit('/').next().unwrap_or(comm).to_ascii_lowercase();
     match basename.as_str() {
         "claude" => Some(AgentKind::ClaudeCode),
         "codex" | "codex-cli" => Some(AgentKind::CodexCli),
@@ -148,11 +141,14 @@ fn match_process_name(comm: &str) -> Option<AgentKind> {
 
 /// Last-resort: look for unique keys in the JSON payload.
 ///
-/// - Cursor: `cursor_version`, `composer_mode`, `conversation_id`, `workspace_roots`
-///   (note: Cursor also emits `transcript_path` + `hook_event_name`, so check
-///    Cursor-specific keys BEFORE the Claude Code fallback).
-/// - Claude Code: `transcript_path` + `hook_event_name` + `session_id`, lacking
-///   any of the Cursor-specific fields above.
+/// All three of Cursor / Codex / Claude Code emit `transcript_path` +
+/// `hook_event_name`, so we need stronger discriminators before the fallback:
+///
+/// - Cursor: `cursor_version`, `composer_mode`, `workspace_roots`.
+/// - Codex CLI: top-level `model` string + `turn_id` on turn-scoped events.
+///   `transcript_path` (when present) lives under `~/.codex/`.
+/// - Claude Code: `permission_mode`, `tool_use_id`, or `transcript_path`
+///   under `~/.claude/`.
 fn detect_by_schema(payload: &serde_json::Value) -> Option<AgentKind> {
     let obj = payload.as_object()?;
     if obj.contains_key("cursor_version")
@@ -160,6 +156,29 @@ fn detect_by_schema(payload: &serde_json::Value) -> Option<AgentKind> {
         || obj.contains_key("workspace_roots")
     {
         return Some(AgentKind::Cursor);
+    }
+    // `transcript_path` prefix is the strongest discriminator between Codex
+    // and Claude Code — both payloads carry `permission_mode` and
+    // `hook_event_name`, so neither is on its own a reliable signal.
+    if let Some(path) = obj.get("transcript_path").and_then(|v| v.as_str()) {
+        if path.contains("/.codex/") {
+            return Some(AgentKind::CodexCli);
+        }
+        if path.contains("/.claude/") {
+            return Some(AgentKind::ClaudeCode);
+        }
+    }
+    // Codex tags every turn-scoped event with `turn_id`; Claude Code uses
+    // `tool_use_id` on tool events instead.
+    if obj.contains_key("turn_id") {
+        return Some(AgentKind::CodexCli);
+    }
+    if obj.contains_key("tool_use_id") {
+        return Some(AgentKind::ClaudeCode);
+    }
+    // Codex always sets top-level `model`; Claude Code does not.
+    if obj.contains_key("model") && obj.contains_key("hook_event_name") {
+        return Some(AgentKind::CodexCli);
     }
     if obj.contains_key("transcript_path") && obj.contains_key("hook_event_name") {
         return Some(AgentKind::ClaudeCode);

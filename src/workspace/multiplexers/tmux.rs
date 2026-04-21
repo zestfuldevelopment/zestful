@@ -18,7 +18,11 @@ pub fn detect() -> Result<Vec<TmuxSession>> {
     }
 
     let output = Command::new("tmux")
-        .args(["list-sessions", "-F", "#{session_name}\t#{session_id}\t#{session_attached}"])
+        .args([
+            "list-sessions",
+            "-F",
+            "#{session_name}\t#{session_id}\t#{session_attached}",
+        ])
         .output()?;
 
     if !output.status.success() {
@@ -160,11 +164,14 @@ fn focus_sync(session: &str, window: Option<&str>, pane: Option<&str>) -> Result
             .output();
         if let Ok(ref o) = output {
             if !o.status.success() {
-                crate::log::log("tmux", &format!(
-                    "select-window -t {} failed: {}",
-                    target,
-                    String::from_utf8_lossy(&o.stderr).trim()
-                ));
+                crate::log::log(
+                    "tmux",
+                    &format!(
+                        "select-window -t {} failed: {}",
+                        target,
+                        String::from_utf8_lossy(&o.stderr).trim()
+                    ),
+                );
             }
         }
 
@@ -175,22 +182,28 @@ fn focus_sync(session: &str, window: Option<&str>, pane: Option<&str>) -> Result
                 .output();
             if let Ok(ref o) = output {
                 if !o.status.success() {
-                    crate::log::log("tmux", &format!(
-                        "select-pane -t {} failed: {}",
-                        pane_target,
-                        String::from_utf8_lossy(&o.stderr).trim()
-                    ));
+                    crate::log::log(
+                        "tmux",
+                        &format!(
+                            "select-pane -t {} failed: {}",
+                            pane_target,
+                            String::from_utf8_lossy(&o.stderr).trim()
+                        ),
+                    );
                 }
             }
         }
     }
 
-    crate::log::log("tmux", &format!(
-        "focus session={} window={} pane={}",
-        session,
-        window.unwrap_or(""),
-        pane.unwrap_or("")
-    ));
+    crate::log::log(
+        "tmux",
+        &format!(
+            "focus session={} window={} pane={}",
+            session,
+            window.unwrap_or(""),
+            pane.unwrap_or("")
+        ),
+    );
 
     Ok(())
 }

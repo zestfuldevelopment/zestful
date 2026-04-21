@@ -150,18 +150,16 @@ public class ZestfulWin32 {
 }' } catch {}"#;
 
     let find_proc = match window_id {
-        Some(pid) if pid.chars().all(|c| c.is_ascii_digit()) => format!(
-            "$p = Get-Process -Id {} -ErrorAction SilentlyContinue",
-            pid
-        ),
+        Some(pid) if pid.chars().all(|c| c.is_ascii_digit()) => {
+            format!("$p = Get-Process -Id {} -ErrorAction SilentlyContinue", pid)
+        }
         _ => String::from(
-            "$p = Get-Process -Name cmd -ErrorAction SilentlyContinue | Select-Object -First 1"
+            "$p = Get-Process -Name cmd -ErrorAction SilentlyContinue | Select-Object -First 1",
         ),
     };
 
-    let script = format!(
-        "{add_type}; {find_proc}; if ($p) {{ [ZestfulWin32]::Focus([uint32]$p.Id) }}"
-    );
+    let script =
+        format!("{add_type}; {find_proc}; if ($p) {{ [ZestfulWin32]::Focus([uint32]$p.Id) }}");
 
     let _ = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])

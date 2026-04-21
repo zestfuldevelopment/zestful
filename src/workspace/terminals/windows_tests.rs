@@ -113,7 +113,10 @@ fn detectors_do_not_cross_report() {
             .iter()
             .flat_map(|w| w.tabs.iter())
             .any(|tab| tab.shell_pid == Some(ps_pid));
-        assert!(!found_ps, "cmd::detect() reported powershell.exe pid {ps_pid}");
+        assert!(
+            !found_ps,
+            "cmd::detect() reported powershell.exe pid {ps_pid}"
+        );
     }
 
     // powershell detector must not include the cmd PID.
@@ -123,7 +126,10 @@ fn detectors_do_not_cross_report() {
             .iter()
             .flat_map(|w| w.tabs.iter())
             .any(|tab| tab.shell_pid == Some(cmd_pid));
-        assert!(!found_cmd, "powershell::detect() reported cmd.exe pid {cmd_pid}");
+        assert!(
+            !found_cmd,
+            "powershell::detect() reported cmd.exe pid {cmd_pid}"
+        );
     }
 }
 
@@ -411,8 +417,7 @@ fn detect_wt_two_tabs() {
     );
 
     // Both tabs must be in the same WT window (same HWND).
-    let hwnds: std::collections::HashSet<&str> =
-        new_tabs.iter().map(|(h, _)| h.as_str()).collect();
+    let hwnds: std::collections::HashSet<&str> = new_tabs.iter().map(|(h, _)| h.as_str()).collect();
     assert_eq!(
         hwnds.len(),
         1,
@@ -420,7 +425,11 @@ fn detect_wt_two_tabs() {
         hwnds,
     );
 
-    println!("WT window {} — {} new tab(s):", new_tabs[0].0, new_tabs.len());
+    println!(
+        "WT window {} — {} new tab(s):",
+        new_tabs[0].0,
+        new_tabs.len()
+    );
     for (i, (hwnd, pid)) in new_tabs.iter().enumerate() {
         println!("  Tab {}: hwnd={hwnd} shell_pid={pid}", i + 1);
     }
@@ -444,11 +453,14 @@ fn detect_wt_three_tabs() {
         new_tabs,
     );
 
-    let hwnds: std::collections::HashSet<&str> =
-        new_tabs.iter().map(|(h, _)| h.as_str()).collect();
+    let hwnds: std::collections::HashSet<&str> = new_tabs.iter().map(|(h, _)| h.as_str()).collect();
     assert_eq!(hwnds.len(), 1, "tabs spread across windows: {:?}", hwnds);
 
-    println!("WT window {} — {} new tab(s):", new_tabs[0].0, new_tabs.len());
+    println!(
+        "WT window {} — {} new tab(s):",
+        new_tabs[0].0,
+        new_tabs.len()
+    );
     for (i, (_, pid)) in new_tabs.iter().enumerate() {
         println!("  Tab {}: shell_pid={pid}", i + 1);
     }

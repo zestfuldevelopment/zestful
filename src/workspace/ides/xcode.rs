@@ -71,10 +71,7 @@ end tell"#,
 }
 
 fn get_xcode_pid() -> Option<u32> {
-    let output = Command::new("pgrep")
-        .args(["-x", "Xcode"])
-        .output()
-        .ok()?;
+    let output = Command::new("pgrep").args(["-x", "Xcode"]).output().ok()?;
 
     if !output.status.success() {
         return None;

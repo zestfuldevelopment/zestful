@@ -93,7 +93,10 @@ pub fn read_port() -> u16 {
             .output()
         {
             if output.status.success() {
-                if let Ok(port) = String::from_utf8_lossy(&output.stdout).trim().parse::<u16>() {
+                if let Ok(port) = String::from_utf8_lossy(&output.stdout)
+                    .trim()
+                    .parse::<u16>()
+                {
                     return port;
                 }
             }

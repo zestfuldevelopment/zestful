@@ -122,10 +122,7 @@ pub fn detect() -> Result<Option<TerminalEmulator>> {
 pub async fn focus(window_id: Option<&str>, _tab_id: Option<&str>) -> Result<()> {
     let window_id = window_id.map(String::from);
 
-    tokio::task::spawn_blocking(move || {
-        focus_applescript(window_id.as_deref())
-    })
-    .await??;
+    tokio::task::spawn_blocking(move || focus_applescript(window_id.as_deref())).await??;
 
     Ok(())
 }
@@ -166,9 +163,7 @@ end tell"#,
         _ => r#"tell application "iTerm2" to activate"#.to_string(),
     };
 
-    let _ = Command::new("osascript")
-        .args(["-e", &script])
-        .output();
+    let _ = Command::new("osascript").args(["-e", &script]).output();
 
     Ok(())
 }

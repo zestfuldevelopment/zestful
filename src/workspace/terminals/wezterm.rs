@@ -48,15 +48,12 @@ pub fn detect() -> Result<Option<TerminalEmulator>> {
             .unwrap_or("")
             .to_string();
 
-        let cwd = entry
-            .get("cwd")
-            .and_then(|v| v.as_str())
-            .map(|s| {
-                s.strip_prefix("file://localhost")
-                    .or_else(|| s.strip_prefix("file://"))
-                    .unwrap_or(s)
-                    .to_string()
-            });
+        let cwd = entry.get("cwd").and_then(|v| v.as_str()).map(|s| {
+            s.strip_prefix("file://localhost")
+                .or_else(|| s.strip_prefix("file://"))
+                .unwrap_or(s)
+                .to_string()
+        });
 
         let (cols, rows) = entry
             .get("size")

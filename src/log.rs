@@ -17,11 +17,7 @@ pub fn log(component: &str, message: &str) {
         let _ = fs::create_dir_all(parent);
     }
 
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-    {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&log_path) {
         let _ = file.write_all(line.as_bytes());
     }
 }

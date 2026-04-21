@@ -17,7 +17,11 @@ pub struct Policy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Severity { Info, Warning, Urgent }
+pub enum Severity {
+    Info,
+    Warning,
+    Urgent,
+}
 
 impl Severity {
     pub fn as_str(self) -> &'static str {
@@ -40,6 +44,52 @@ pub fn resolve(agent: AgentKind, payload: &serde_json::Value) -> Policy {
     match agent {
         AgentKind::ClaudeCode => claude_code(event, payload),
         AgentKind::Cursor => cursor(event, payload),
+        AgentKind::CodexCli => codex(event, payload),
+        _ => generic(event),
+    }
+}
+
+fn codex(event: &str, payload: &serde_json::Value) -> Policy {
+    match event {
+        "Stop" => Policy {
+            severity: Severity::Warning,
+            message: "Waiting for your input".into(),
+            push: true,
+            skip: false,
+        },
+        "UserPromptSubmit" => {
+            let prompt = payload
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            let message = if prompt.is_empty() {
+                "Working...".into()
+            } else {
+                let preview: String = prompt.chars().take(80).collect();
+                format!("Working on: {}", preview)
+            };
+            Policy { severity: Severity::Info, message, push: false, skip: false }
+        }
+        "PreToolUse" => {
+            let tool = payload
+                .get("tool_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("tool");
+            Policy {
+                severity: Severity::Info,
+                message: format!("Using {}", tool),
+                push: false,
+                skip: false,
+            }
+        }
+        // SessionStart / PostToolUse: don't surface every tick.
+        "SessionStart" | "PostToolUse" => Policy {
+            severity: Severity::Info,
+            message: String::new(),
+            push: false,
+            skip: true,
+        },
         _ => generic(event),
     }
 }
@@ -64,7 +114,12 @@ fn cursor(event: &str, payload: &serde_json::Value) -> Policy {
                 let preview: String = prompt.chars().take(80).collect();
                 format!("Working on: {}", preview)
             };
-            Policy { severity: Severity::Info, message, push: false, skip: false }
+            Policy {
+                severity: Severity::Info,
+                message,
+                push: false,
+                skip: false,
+            }
         }
         "beforeShellExecution" => Policy {
             severity: Severity::Info,
@@ -121,7 +176,12 @@ fn claude_code(event: &str, payload: &serde_json::Value) -> Policy {
                 let preview: String = prompt.chars().take(80).collect();
                 format!("Working on: {}", preview)
             };
-            Policy { severity: Severity::Info, message, push: false, skip: false }
+            Policy {
+                severity: Severity::Info,
+                message,
+                push: false,
+                skip: false,
+            }
         }
         "PreToolUse" => {
             let tool = payload

@@ -19,14 +19,26 @@ use crate::workspace::types::{IdeInstance, IdeProject};
 
 struct AppSpec {
     process_name: &'static str,
-    support_dir: &'static str,  // relative to ~/Library/Application Support/
+    support_dir: &'static str, // relative to ~/Library/Application Support/
     display: &'static str,
 }
 
 const APPS: &[AppSpec] = &[
-    AppSpec { process_name: "Code",     support_dir: "Code",     display: "Visual Studio Code" },
-    AppSpec { process_name: "Cursor",   support_dir: "Cursor",   display: "Cursor" },
-    AppSpec { process_name: "Windsurf", support_dir: "Windsurf", display: "Windsurf" },
+    AppSpec {
+        process_name: "Code",
+        support_dir: "Code",
+        display: "Visual Studio Code",
+    },
+    AppSpec {
+        process_name: "Cursor",
+        support_dir: "Cursor",
+        display: "Cursor",
+    },
+    AppSpec {
+        process_name: "Windsurf",
+        support_dir: "Windsurf",
+        display: "Windsurf",
+    },
 ];
 
 /// Which VS Code-family editor to target for focus.
@@ -106,10 +118,8 @@ pub async fn focus_terminal(family: Family, terminal_id: &str) -> Result<()> {
 pub async fn focus(family: Family, project_id: Option<&str>) -> Result<()> {
     let project_id_owned = project_id.map(String::from);
     let family_move = family;
-    tokio::task::spawn_blocking(move || {
-        focus_sync(family_move, project_id_owned.as_deref())
-    })
-    .await??;
+    tokio::task::spawn_blocking(move || focus_sync(family_move, project_id_owned.as_deref()))
+        .await??;
     Ok(())
 }
 
@@ -125,7 +135,9 @@ fn focus_sync(family: Family, project_id: Option<&str>) -> Result<()> {
                     .status()
                     .map(|s| s.success())
                     .unwrap_or(false);
-                if ok { return Ok(()); }
+                if ok {
+                    return Ok(());
+                }
             }
             let _ = Command::new("/usr/bin/open")
                 .args(["-a", family.app_bundle_name(), &path])
@@ -152,10 +164,7 @@ fn find_cli(family: Family) -> Option<std::path::PathBuf> {
             "/opt/homebrew/bin/cursor",
             "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
         ],
-        Family::Windsurf => &[
-            "/usr/local/bin/windsurf",
-            "/opt/homebrew/bin/windsurf",
-        ],
+        Family::Windsurf => &["/usr/local/bin/windsurf", "/opt/homebrew/bin/windsurf"],
     };
     for path in candidates {
         if std::path::Path::new(path).exists() {
@@ -169,7 +178,11 @@ fn find_cli(family: Family) -> Option<std::path::PathBuf> {
         .ok()
         .and_then(|o| {
             let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if s.is_empty() { None } else { Some(std::path::PathBuf::from(s)) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(std::path::PathBuf::from(s))
+            }
         })
 }
 
@@ -185,9 +198,15 @@ fn lookup_project_path(family: Family, project_name: &str) -> Option<String> {
     for entry in entries.flatten() {
         let path = entry.path();
         let ws_json = path.join("workspace.json");
-        let Ok(contents) = fs::read_to_string(&ws_json) else { continue };
-        let Ok(parsed) = serde_json::from_str::<WorkspaceFile>(&contents) else { continue };
-        let Some(uri) = parsed.folder.or(parsed.workspace) else { continue };
+        let Ok(contents) = fs::read_to_string(&ws_json) else {
+            continue;
+        };
+        let Ok(parsed) = serde_json::from_str::<WorkspaceFile>(&contents) else {
+            continue;
+        };
+        let Some(uri) = parsed.folder.or(parsed.workspace) else {
+            continue;
+        };
         let local = uri.strip_prefix("file://").unwrap_or(&uri);
         let decoded = urlencoding_decode(local);
         let name = PathBuf::from(&decoded)
@@ -285,7 +304,7 @@ fn read_workspace_project(dir: &PathBuf) -> Option<IdeProject> {
         name,
         uri: None,
         path: decoded,
-        active: false,  // can't tell without UI scripting
+        active: false, // can't tell without UI scripting
     })
 }
 

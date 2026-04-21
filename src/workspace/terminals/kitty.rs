@@ -75,14 +75,8 @@ pub fn detect() -> Result<Option<TerminalEmulator>> {
                                 .map(|s| s.to_string())
                                 .or_else(|| fg_pid.and_then(process::get_cwd));
 
-                            let cols = kw
-                                .get("columns")
-                                .and_then(|v| v.as_u64())
-                                .map(|v| v as u32);
-                            let rows = kw
-                                .get("lines")
-                                .and_then(|v| v.as_u64())
-                                .map(|v| v as u32);
+                            let cols = kw.get("columns").and_then(|v| v.as_u64()).map(|v| v as u32);
+                            let rows = kw.get("lines").and_then(|v| v.as_u64()).map(|v| v as u32);
 
                             let shell = kw
                                 .get("foreground_processes")
@@ -94,9 +88,7 @@ pub fn detect() -> Result<Option<TerminalEmulator>> {
                                 .and_then(|v| v.as_str())
                                 .map(|s| {
                                     let name = s.rsplit('/').next().unwrap_or(s);
-                                    name.strip_prefix('-')
-                                        .unwrap_or(name)
-                                        .to_string()
+                                    name.strip_prefix('-').unwrap_or(name).to_string()
                                 });
 
                             let tab = TerminalTab {
@@ -157,18 +149,25 @@ fn focus_sync(window_id: Option<&str>) -> Result<()> {
         if let Some(socket) = socket {
             let output = Command::new("kitty")
                 .args([
-                    "@", "--to", &format!("unix:{}", socket),
-                    "focus-window", "--match", &format!("id:{}", win_id),
+                    "@",
+                    "--to",
+                    &format!("unix:{}", socket),
+                    "focus-window",
+                    "--match",
+                    &format!("id:{}", win_id),
                 ])
                 .output();
 
             if let Ok(ref o) = output {
                 if !o.status.success() {
-                    crate::log::log("kitty", &format!(
-                        "focus-window --match id:{} failed: {}",
-                        win_id,
-                        String::from_utf8_lossy(&o.stderr).trim()
-                    ));
+                    crate::log::log(
+                        "kitty",
+                        &format!(
+                            "focus-window --match id:{} failed: {}",
+                            win_id,
+                            String::from_utf8_lossy(&o.stderr).trim()
+                        ),
+                    );
                 }
             }
         }

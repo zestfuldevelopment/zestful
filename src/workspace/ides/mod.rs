@@ -1,12 +1,12 @@
 //! IDE detection (Xcode, VS Code family, etc.)
 
 #[cfg(target_os = "macos")]
-mod xcode;
-#[cfg(target_os = "macos")]
 pub mod vscode_family;
+#[cfg(target_os = "macos")]
+mod xcode;
 
-use anyhow::Result;
 use crate::workspace::types::IdeInstance;
+use anyhow::Result;
 
 pub fn detect_all() -> Result<Vec<IdeInstance>> {
     let mut ides = Vec::new();
@@ -28,7 +28,11 @@ pub fn detect_all() -> Result<Vec<IdeInstance>> {
 /// `workspace://<ide>/...` URI arrives. The URI may carry a `project:<name>`
 /// (workspace-level focus) or a `terminal:<id>` (integrated terminal focus
 /// via the Zestful VS Code extension).
-pub async fn handle_focus(app: &str, project_id: Option<&str>, terminal_id: Option<&str>) -> Result<()> {
+pub async fn handle_focus(
+    app: &str,
+    project_id: Option<&str>,
+    terminal_id: Option<&str>,
+) -> Result<()> {
     let lower = app.to_lowercase();
 
     #[cfg(target_os = "macos")]

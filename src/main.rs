@@ -13,7 +13,11 @@ pub mod workspace;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "zestful", version, about = "CLI for the Zestful agent notification app")]
+#[command(
+    name = "zestful",
+    version,
+    about = "CLI for the Zestful agent notification app"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -146,9 +150,12 @@ fn main() -> anyhow::Result<()> {
 
         Commands::Daemon => cmd::daemon::run(),
 
-        Commands::Focus { terminal_uri, app, window_id, tab_id } => {
-            cmd::focus::run(terminal_uri, app, window_id, tab_id)
-        }
+        Commands::Focus {
+            terminal_uri,
+            app,
+            window_id,
+            tab_id,
+        } => cmd::focus::run(terminal_uri, app, window_id, tab_id),
 
         Commands::Inspect { command, pretty } => cmd::inspect::run(command, pretty),
 

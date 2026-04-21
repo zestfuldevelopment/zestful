@@ -25,9 +25,7 @@ pub fn run(agent: String, command: Vec<String>) -> Result<()> {
     crate::log::log("watch", &format!("running: {}", command.join(" ")));
 
     // Run the command
-    let status = Command::new(&command[0])
-        .args(&command[1..])
-        .status();
+    let status = Command::new(&command[0]).args(&command[1..]).status();
 
     let exit_code = match status {
         Ok(s) => s.code().unwrap_or(1),
@@ -47,11 +45,28 @@ pub fn run(agent: String, command: Vec<String>) -> Result<()> {
     let (severity, message) = if exit_code == 0 {
         ("warning", format!("{} finished", cmd_name))
     } else {
-        ("urgent", format!("{} failed (exit {})", cmd_name, exit_code))
+        (
+            "urgent",
+            format!("{} failed (exit {})", cmd_name, exit_code),
+        )
     };
 
-    crate::log::log("watch", &format!("exit={} severity={} agent={}", exit_code, severity, agent_name));
-    let _ = notify::send(&token, port, &agent_name, &message, severity, terminal_uri, false);
+    crate::log::log(
+        "watch",
+        &format!(
+            "exit={} severity={} agent={}",
+            exit_code, severity, agent_name
+        ),
+    );
+    let _ = notify::send(
+        &token,
+        port,
+        &agent_name,
+        &message,
+        severity,
+        terminal_uri,
+        false,
+    );
 
     std::process::exit(exit_code);
 }

@@ -43,18 +43,31 @@ pub fn run(
         .or_else(|| crate::workspace::locate().ok())
         .or_else(|| config::read_terminal_uri());
 
-    crate::log::log("notify", &format!(
-        "agent={} severity={} message=\"{}\" uri={} push={}",
-        agent, severity, message,
-        terminal_uri.as_deref().unwrap_or("none"),
-        !no_push
-    ));
+    crate::log::log(
+        "notify",
+        &format!(
+            "agent={} severity={} message=\"{}\" uri={} push={}",
+            agent,
+            severity,
+            message,
+            terminal_uri.as_deref().unwrap_or("none"),
+            !no_push
+        ),
+    );
 
     if debug {
         eprintln!("zestful: uri={}", terminal_uri.as_deref().unwrap_or("none"));
     }
 
-    send(&token, port, &agent, &message, &severity, terminal_uri, no_push)
+    send(
+        &token,
+        port,
+        &agent,
+        &message,
+        &severity,
+        terminal_uri,
+        no_push,
+    )
 }
 
 /// Send a notification to the Zestful app. Used by both `notify` and `watch` commands.
@@ -92,12 +105,17 @@ pub fn send(
          Connection: close\r\n\
          \r\n\
          {}",
-        port, token, json.len(), json
+        port,
+        token,
+        json.len(),
+        json
     );
 
     match TcpStream::connect(format!("127.0.0.1:{}", port)) {
         Ok(mut stream) => {
-            stream.set_read_timeout(Some(std::time::Duration::from_secs(3))).ok();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                .ok();
             if let Err(e) = stream.write_all(request.as_bytes()) {
                 crate::log::log("notify", &format!("write error: {}", e));
             } else {

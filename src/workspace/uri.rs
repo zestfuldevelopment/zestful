@@ -173,7 +173,10 @@ pub fn escape_applescript(s: &str) -> String {
 pub fn activate_app_sync(app: &str) {
     let escaped = escape_applescript(app);
     let _ = std::process::Command::new("osascript")
-        .args(["-e", &format!("tell application \"{}\" to activate", escaped)])
+        .args([
+            "-e",
+            &format!("tell application \"{}\" to activate", escaped),
+        ])
         .output();
 }
 
@@ -223,9 +226,7 @@ mod tests {
 
     #[test]
     fn test_parse_terminal_uri_tmux_session_only() {
-        let parsed =
-            parse_terminal_uri("workspace://iterm2/window:1/tab:1/tmux:dev")
-                .unwrap();
+        let parsed = parse_terminal_uri("workspace://iterm2/window:1/tab:1/tmux:dev").unwrap();
         let tmux = parsed.tmux.as_ref().unwrap();
         assert_eq!(tmux.session, "dev");
         assert!(tmux.window.is_none());
@@ -235,8 +236,7 @@ mod tests {
     #[test]
     fn test_parse_terminal_uri_tmux_window_no_pane() {
         let parsed =
-            parse_terminal_uri("workspace://iterm2/window:1/tab:1/tmux:main/window:2")
-                .unwrap();
+            parse_terminal_uri("workspace://iterm2/window:1/tab:1/tmux:main/window:2").unwrap();
         let tmux = parsed.tmux.as_ref().unwrap();
         assert_eq!(tmux.session, "main");
         assert_eq!(tmux.window.as_deref(), Some("2"));
@@ -328,7 +328,8 @@ mod tests {
 
     #[test]
     fn test_parse_terminal_uri_windows_terminal() {
-        let parsed = parse_terminal_uri("workspace://windows-terminal/window:131072/tab:2").unwrap();
+        let parsed =
+            parse_terminal_uri("workspace://windows-terminal/window:131072/tab:2").unwrap();
         assert_eq!(parsed.app, "Windows Terminal");
         assert_eq!(parsed.window_id.as_deref(), Some("131072"));
         assert_eq!(parsed.tab_id.as_deref(), Some("2"));

@@ -27,10 +27,7 @@ pub fn detect() -> Result<Option<TerminalEmulator>> {
 fn collect_windows() -> Vec<TerminalWindow> {
     let mut entries: Vec<(u32, String, &str)> = Vec::new();
 
-    for &(exe_name, shell_name) in &[
-        ("powershell.exe", "powershell"),
-        ("pwsh.exe", "pwsh"),
-    ] {
+    for &(exe_name, shell_name) in &[("powershell.exe", "powershell"), ("pwsh.exe", "pwsh")] {
         for (pid, title) in process::query_tasklist(exe_name) {
             entries.push((pid, title, shell_name));
         }
@@ -169,9 +166,8 @@ public class ZestfulWin32 {
         ),
     };
 
-    let script = format!(
-        "{add_type}; {find_proc}; if ($p) {{ [ZestfulWin32]::Focus([uint32]$p.Id) }}"
-    );
+    let script =
+        format!("{add_type}; {find_proc}; if ($p) {{ [ZestfulWin32]::Focus([uint32]$p.Id) }}");
 
     let _ = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])

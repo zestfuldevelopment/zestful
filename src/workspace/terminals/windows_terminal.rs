@@ -211,7 +211,10 @@ fn focus_sync(window_id: &str, tab_id: Option<&str>) -> Result<()> {
     // shell process creation time to find the current tab index for that PID.
     // This is robust to the user reordering tabs by drag.
     let shell_pid: u32 = tab_id.and_then(|t| t.parse().ok()).unwrap_or(0);
-    crate::log::log("wt-focus", &format!("hwnd={} shell_pid={}", hwnd, shell_pid));
+    crate::log::log(
+        "wt-focus",
+        &format!("hwnd={} shell_pid={}", hwnd, shell_pid),
+    );
 
     let script = format!(
         r#"

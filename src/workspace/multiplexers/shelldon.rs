@@ -99,12 +99,18 @@ fn query_panes(info: &DiscoveryInfo) -> Result<Vec<ShelldonPane>> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let is_focused = p.get("is_focused").and_then(|v| v.as_bool()).unwrap_or(false);
+        let is_focused = p
+            .get("is_focused")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let tabs: Vec<ShelldonTab> = tabs_raw
             .iter()
             .filter(|t| {
-                t.get("pane_id").and_then(|v| v.as_u64()).unwrap_or(u64::MAX) == pane_id as u64
+                t.get("pane_id")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(u64::MAX)
+                    == pane_id as u64
             })
             .flat_map(|t| {
                 t.get("tabs")
@@ -129,7 +135,10 @@ fn query_panes(info: &DiscoveryInfo) -> Result<Vec<ShelldonPane>> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
-                is_active: t.get("is_active").and_then(|v| v.as_bool()).unwrap_or(false),
+                is_active: t
+                    .get("is_active")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
             })
             .collect();
 
@@ -175,10 +184,7 @@ fn mcp_call(info: &DiscoveryInfo, method: &str, args: &str) -> Result<String> {
 
     let response = String::from_utf8_lossy(&response);
 
-    let body = response
-        .split("\r\n\r\n")
-        .nth(1)
-        .unwrap_or("");
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or("");
 
     let rpc: serde_json::Value = serde_json::from_str(body)?;
     let text = rpc
@@ -201,8 +207,7 @@ pub async fn focus(info: &ShelldonInfo) -> Result<()> {
     };
 
     let session_id = info.session_id.clone();
-    tokio::task::spawn_blocking(move || focus_sync(&session_id, &tab_id))
-        .await??;
+    tokio::task::spawn_blocking(move || focus_sync(&session_id, &tab_id)).await??;
 
     Ok(())
 }
@@ -255,7 +260,10 @@ fn focus_sync(session_id: &str, tab_id: &str) -> Result<()> {
     let mut response = Vec::new();
     stream.read_to_end(&mut response)?;
 
-    crate::log::log("daemon", &format!("shelldon focus_tab({}) on port {} — ok", tab_id, port));
+    crate::log::log(
+        "daemon",
+        &format!("shelldon focus_tab({}) on port {} — ok", tab_id, port),
+    );
 
     Ok(())
 }

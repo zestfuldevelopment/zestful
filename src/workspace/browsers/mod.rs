@@ -6,8 +6,8 @@ mod chrome;
 #[cfg(target_os = "windows")]
 mod chrome_windows;
 
-use anyhow::Result;
 use crate::workspace::types::BrowserInstance;
+use anyhow::Result;
 
 /// Focus a browser tab by app name, window ID, and tab index.
 pub async fn handle_focus(app: &str, window_id: Option<&str>, tab_id: Option<&str>) -> Result<()> {

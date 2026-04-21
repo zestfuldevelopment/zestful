@@ -6,13 +6,13 @@
 pub mod browsers;
 pub mod ides;
 mod locate;
+pub mod multiplexers;
 pub mod process;
 pub mod terminals;
-pub mod multiplexers;
 mod types;
 pub mod uri;
 
-pub use locate::locate;
+pub use locate::{find_active_codex_editor, locate};
 pub use types::*;
 
 use anyhow::Result;

@@ -14,9 +14,8 @@ pub fn run(args: Vec<String>) -> Result<()> {
         bail!("zestful ssh requires a host\nUsage: zestful ssh [user@]host [ssh options...]");
     }
 
-    let token = config::read_token().ok_or_else(|| {
-        anyhow::anyhow!("Zestful app not running. Token not found.")
-    })?;
+    let token = config::read_token()
+        .ok_or_else(|| anyhow::anyhow!("Zestful app not running. Token not found."))?;
     let port = config::read_port();
 
     let dest = &args[0];
@@ -24,10 +23,20 @@ pub fn run(args: Vec<String>) -> Result<()> {
     // Capture terminal URI for click-to-focus on the remote side
     let terminal_uri = crate::workspace::locate().ok();
 
-    crate::log::log("ssh", &format!("connecting to {} uri={}", dest, terminal_uri.as_deref().unwrap_or("none")));
+    crate::log::log(
+        "ssh",
+        &format!(
+            "connecting to {} uri={}",
+            dest,
+            terminal_uri.as_deref().unwrap_or("none")
+        ),
+    );
 
     // Create remote config dir
-    run_ssh(dest, "mkdir -p ~/.config/zestful && chmod 700 ~/.config/zestful")?;
+    run_ssh(
+        dest,
+        "mkdir -p ~/.config/zestful && chmod 700 ~/.config/zestful",
+    )?;
 
     // Copy token
     pipe_to_ssh(
@@ -79,9 +88,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
 }
 
 fn run_ssh(dest: &str, remote_cmd: &str) -> Result<()> {
-    let status = Command::new("ssh")
-        .args([dest, remote_cmd])
-        .status()?;
+    let status = Command::new("ssh").args([dest, remote_cmd]).status()?;
     if !status.success() {
         bail!("SSH command failed: {}", remote_cmd);
     }

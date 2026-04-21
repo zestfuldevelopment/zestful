@@ -100,10 +100,7 @@ impl InspectorOutput {
                 other => other.to_lowercase().replace(' ', "-"),
             };
             for project in &mut ide.projects {
-                project.uri = Some(format!(
-                    "workspace://{}/project:{}",
-                    app, project.name
-                ));
+                project.uri = Some(format!("workspace://{}/project:{}", app, project.name));
             }
         }
     }

@@ -54,7 +54,8 @@ pub fn run(
                 &parsed.app,
                 parsed.project_id.as_deref(),
                 parsed.terminal_id.as_deref(),
-            ).await
+            )
+            .await
         } else if is_browser {
             browsers::handle_focus(
                 &parsed.app,
@@ -114,7 +115,10 @@ mod tests {
     fn test_run_invalid_uri_errors() {
         let result = run(Some("not-a-uri".into()), None, None, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid terminal URI"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid terminal URI"));
     }
 
     #[test]
@@ -126,7 +130,12 @@ mod tests {
 
     #[test]
     fn test_run_with_uri() {
-        let result = run(Some("workspace://kitty/window:1/tab:2".into()), None, None, None);
+        let result = run(
+            Some("workspace://kitty/window:1/tab:2".into()),
+            None,
+            None,
+            None,
+        );
         assert!(result.is_ok());
     }
 }

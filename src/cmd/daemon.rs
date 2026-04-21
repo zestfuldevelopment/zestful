@@ -100,7 +100,10 @@ async fn health() -> impl IntoResponse {
 async fn handle_inspect() -> impl IntoResponse {
     let result = tokio::task::spawn_blocking(|| crate::workspace::inspect_all()).await;
     match result {
-        Ok(Ok(output)) => (StatusCode::OK, Json(serde_json::to_value(&output).unwrap_or_default())),
+        Ok(Ok(output)) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&output).unwrap_or_default()),
+        ),
         Ok(Err(e)) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": e.to_string()})),
@@ -112,9 +115,7 @@ async fn handle_inspect() -> impl IntoResponse {
     }
 }
 
-async fn handle_focus(
-    Json(req): Json<FocusRequest>,
-) -> impl IntoResponse {
+async fn handle_focus(Json(req): Json<FocusRequest>) -> impl IntoResponse {
     // Note: no token auth on /focus. The daemon only listens on 127.0.0.1
     // and the Mac app (the primary caller) does not send a token. This matches
     // the original Node.js daemon behavior.
@@ -150,19 +151,32 @@ async fn handle_focus(
         }
     };
 
-    crate::log::log("daemon", &format!(
-        "focus: app={} window_id={} tab_id={} shelldon={} tmux={} uri={}",
-        parsed.app,
-        parsed.window_id.as_deref().unwrap_or(""),
-        parsed.tab_id.as_deref().unwrap_or(""),
-        parsed.shelldon.as_ref().map(|s| s.session_id.as_str()).unwrap_or(""),
-        parsed.tmux.as_ref().map(|t| t.session.as_str()).unwrap_or(""),
-        req.terminal_uri.as_deref().unwrap_or("")
-    ));
+    crate::log::log(
+        "daemon",
+        &format!(
+            "focus: app={} window_id={} tab_id={} shelldon={} tmux={} uri={}",
+            parsed.app,
+            parsed.window_id.as_deref().unwrap_or(""),
+            parsed.tab_id.as_deref().unwrap_or(""),
+            parsed
+                .shelldon
+                .as_ref()
+                .map(|s| s.session_id.as_str())
+                .unwrap_or(""),
+            parsed
+                .tmux
+                .as_ref()
+                .map(|t| t.session.as_str())
+                .unwrap_or(""),
+            req.terminal_uri.as_deref().unwrap_or("")
+        ),
+    );
 
     // Focus the app — route by URI shape.
     let app_lower = parsed.app.to_lowercase();
-    let is_browser = app_lower.contains("chrome") || app_lower.contains("safari") || app_lower.contains("firefox");
+    let is_browser = app_lower.contains("chrome")
+        || app_lower.contains("safari")
+        || app_lower.contains("firefox");
     let is_ide = parsed.project_id.is_some()
         || parsed.terminal_id.is_some()
         || app_lower == "xcode"
@@ -176,7 +190,8 @@ async fn handle_focus(
             &parsed.app,
             parsed.project_id.as_deref(),
             parsed.terminal_id.as_deref(),
-        ).await
+        )
+        .await
     } else if is_browser {
         browsers::handle_focus(
             &parsed.app,
@@ -266,7 +281,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "ok");
     }
@@ -286,7 +303,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"], "terminal_uri or app is required");
     }
@@ -325,7 +344,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "ok");
     }
@@ -347,7 +368,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "ok");
     }
@@ -360,16 +383,16 @@ mod tests {
                     .method("POST")
                     .uri("/focus")
                     .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"terminal_uri":"not-a-valid-uri"}"#,
-                    ))
+                    .body(Body::from(r#"{"terminal_uri":"not-a-valid-uri"}"#))
                     .unwrap(),
             )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["error"], "invalid terminal_uri");
     }

@@ -1,7 +1,13 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "zestful hook", "timeout": 5 } ] }
+    ],
     "Stop": [
-      { "command": "zestful hook" }
+      { "matcher": "", "hooks": [ { "type": "command", "command": "zestful hook", "timeout": 5 } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "zestful hook", "timeout": 5 } ] }
     ]
   }
 }

@@ -22,23 +22,28 @@ pub fn run(agent_override: Option<String>) -> Result<()> {
         crate::log::log("hook", &format!("--agent override: {}", agent));
     }
 
-    let payload: serde_json::Value = serde_json::from_str(&raw)
-        .unwrap_or_else(|e| {
-            crate::log::log("hook", &format!("JSON parse error: {}", e));
-            serde_json::Value::Null
-        });
+    let payload: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|e| {
+        crate::log::log("hook", &format!("JSON parse error: {}", e));
+        serde_json::Value::Null
+    });
 
     let agent_kind = crate::hooks::detect_agent(agent_override.as_deref(), &payload);
     let policy = crate::hooks::resolve_policy(agent_kind, &payload);
-    crate::log::log("hook", &format!(
-        "resolved: agent={:?} event={} → severity={} msg={:?} push={} skip={}",
-        agent_kind,
-        payload.get("hook_event_name").and_then(|v| v.as_str()).unwrap_or(""),
-        policy.severity.as_str(),
-        policy.message,
-        policy.push,
-        policy.skip,
-    ));
+    crate::log::log(
+        "hook",
+        &format!(
+            "resolved: agent={:?} event={} → severity={} msg={:?} push={} skip={}",
+            agent_kind,
+            payload
+                .get("hook_event_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+            policy.severity.as_str(),
+            policy.message,
+            policy.push,
+            policy.skip,
+        ),
+    );
 
     if policy.skip {
         return Ok(());
@@ -71,7 +76,47 @@ pub fn run(agent_override: Option<String>) -> Result<()> {
                 .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
         })
         .unwrap_or_default();
-    let agent_name = if project.is_empty() {
+    // Codex needs extra logic: the same hook config is shared by the Codex
+    // desktop app and the `codex` CLI run from an editor terminal. The app
+    // puts each task under `~/Documents/Codex/<task-folder>/`, while the CLI
+    // inherits whatever workspace folder the terminal is in.
+    let is_codex_desktop_app = agent_kind == crate::hooks::AgentKind::CodexCli
+        && payload
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .map(|c| c.contains("/Documents/Codex/"))
+            .unwrap_or(false);
+
+    // Codex.app fires the same hook regardless of whether the user is
+    // driving it from the desktop app or the Codex VS Code extension (which
+    // just proxies to the same daemon). If our VS Code extension reports an
+    // active Codex conversation tab, we re-route this event to that editor
+    // window. Otherwise we keep it on the Codex desktop app.
+    let codex_editor = if is_codex_desktop_app {
+        crate::workspace::find_active_codex_editor()
+    } else {
+        None
+    };
+    if let Some((slug, project)) = &codex_editor {
+        crate::log::log(
+            "hook",
+            &format!(
+                "codex correlation: routing to {}/project:{} (active tab)",
+                slug, project
+            ),
+        );
+    }
+
+    // Codex desktop app has no per-window focus, so per-task tiles would
+    // mislead — clicking one lands on whatever Codex window is frontmost.
+    // Collapse to a single `codex` tile until per-window focus exists.
+    let agent_name = if let Some((_, project)) = &codex_editor {
+        format!("Codex CLI: {}", project)
+    } else if is_codex_desktop_app {
+        agent_kind.slug().to_string()
+    } else if agent_kind == crate::hooks::AgentKind::CodexCli && !project.is_empty() {
+        format!("Codex CLI: {}", project)
+    } else if project.is_empty() {
         agent_kind.slug().to_string()
     } else {
         format!("{}:{}", agent_kind.slug(), project)
@@ -82,14 +127,22 @@ pub fn run(agent_override: Option<String>) -> Result<()> {
     // process we know about — e.g. Cursor's AI agent), fall back to a
     // project-level URI synthesized from the payload for IDE-family agents.
     let terminal_uri = crate::workspace::locate().ok().or_else(|| {
-        let editor_slug = match agent_kind {
-            crate::hooks::AgentKind::Cursor => Some("cursor"),
-            _ => None,
-        };
-        match (editor_slug, project.as_str()) {
-            (Some(slug), p) if !p.is_empty() => Some(format!("workspace://{}/project:{}", slug, p)),
-            _ => None,
+        // Codex.app fired, but a VS Code-family window has an active Codex
+        // tab — route focus to that window instead of Codex.app.
+        if let Some((slug, project)) = &codex_editor {
+            return Some(format!("workspace://{}/project:{}", slug, project));
         }
+        // Cursor hook: synthesize a workspace-level URI when the hook's
+        // parent chain doesn't reach the Cursor extension host.
+        if agent_kind == crate::hooks::AgentKind::Cursor && !project.is_empty() {
+            return Some(format!("workspace://cursor/project:{}", project));
+        }
+        // Codex desktop app with no editor correlation: app-level activation
+        // only (no per-window focus).
+        if is_codex_desktop_app {
+            return Some("workspace://codex".to_string());
+        }
+        None
     });
 
     let token = crate::config::read_token().ok_or_else(|| {
@@ -97,14 +150,17 @@ pub fn run(agent_override: Option<String>) -> Result<()> {
     })?;
     let port = crate::config::read_port();
 
-    crate::log::log("hook", &format!(
-        "notify: agent={} message={:?} severity={} uri={} push={}",
-        agent_name,
-        policy.message,
-        policy.severity.as_str(),
-        terminal_uri.as_deref().unwrap_or("none"),
-        policy.push,
-    ));
+    crate::log::log(
+        "hook",
+        &format!(
+            "notify: agent={} message={:?} severity={} uri={} push={}",
+            agent_name,
+            policy.message,
+            policy.severity.as_str(),
+            terminal_uri.as_deref().unwrap_or("none"),
+            policy.push,
+        ),
+    );
 
     crate::cmd::notify::send(
         &token,

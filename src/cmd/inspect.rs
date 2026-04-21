@@ -229,7 +229,13 @@ fn print_pretty(output: &InspectorOutput) {
                         .unwrap_or_default();
                     println!(
                         "    Pane {}: {}@ {} [{}x{}]{}{}",
-                        pane.pane_id, cmd_str, pane.cwd, pane.columns, pane.rows, focus_str, uri_str
+                        pane.pane_id,
+                        cmd_str,
+                        pane.cwd,
+                        pane.columns,
+                        pane.rows,
+                        focus_str,
+                        uri_str
                     );
                 }
             }
@@ -270,10 +276,7 @@ fn print_pretty(output: &InspectorOutput) {
     if !output.ides.is_empty() {
         println!("== IDEs ==\n");
         for ide in &output.ides {
-            let pid_str = ide
-                .pid
-                .map(|p| format!(" (pid {})", p))
-                .unwrap_or_default();
+            let pid_str = ide.pid.map(|p| format!(" (pid {})", p)).unwrap_or_default();
             println!("{}{}", ide.app, pid_str);
 
             for project in &ide.projects {
