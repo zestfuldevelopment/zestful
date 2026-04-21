@@ -4,9 +4,11 @@
 //! the Rust daemon on `127.0.0.1:21548/events`. Best-effort: errors never
 //! propagate to callers.
 
+pub mod device;
 pub mod envelope;
 pub mod payload;
 pub mod preview;
 
+pub use device::device_id;
 pub use envelope::{Context, Correlation, Envelope, Subapplication};
 pub use payload::Payload;
