@@ -140,18 +140,45 @@ pub fn ensure_daemon() {
     std::thread::sleep(std::time::Duration::from_millis(300));
 }
 
-/// Check if a process is alive using kill(pid, 0).
+/// Check if a process is alive.
 fn libc_kill(pid: i32) -> bool {
     if pid <= 0 {
         return false;
     }
-    // SAFETY: kill with signal 0 just checks process existence, no signal is sent.
-    // pid is validated > 0 above, so we won't send to process group 0 or negative groups.
     #[cfg(unix)]
     {
+        // SAFETY: kill with signal 0 just checks process existence, no signal is sent.
+        // pid is validated > 0 above.
         unsafe { libc::kill(pid, 0) == 0 }
     }
-    #[cfg(not(unix))]
+    #[cfg(target_os = "windows")]
+    {
+        // Use tasklist to check if the PID is still alive.
+        let output = Command::new("tasklist")
+            .args([
+                "/fi",
+                &format!("pid eq {}", pid),
+                "/fo",
+                "csv",
+                "/nh",
+            ])
+            .output();
+        match output {
+            Ok(o) => {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                stdout.lines().any(|line| {
+                    let mut fields = line.splitn(5, ',');
+                    fields.next(); // image name
+                    fields
+                        .next()
+                        .and_then(|f| f.trim_matches('"').parse::<i32>().ok())
+                        == Some(pid)
+                })
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
     {
         let _ = pid;
         false

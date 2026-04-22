@@ -91,7 +91,27 @@ async fn run_server() -> Result<()> {
 
     let port = config::daemon_port();
     let addr = format!("127.0.0.1:{}", port);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            // Another daemon is already holding the port. Check it's healthy
+            // before bowing out so we don't silently swallow a zombie situation.
+            let healthy = reqwest::Client::new()
+                .get(format!("http://127.0.0.1:{}/health", port))
+                .timeout(std::time::Duration::from_secs(1))
+                .send()
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false);
+            if healthy {
+                crate::log::log("daemon", "another daemon is already running, exiting");
+                return Ok(());
+            }
+            // Port in use but not healthy — surface the original error.
+            return Err(e.into());
+        }
+        Err(e) => return Err(e.into()),
+    };
     crate::log::log("daemon", &format!("listening on localhost:{}", port));
 
     // Graceful shutdown on SIGTERM/SIGINT
