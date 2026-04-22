@@ -13,7 +13,7 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows_sys::Win32::System::Threading::{AttachThreadInput, OpenProcess, PROCESS_SYNCHRONIZE};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowTextW,
+    BringWindowToTop, EnumWindows, GetClassNameW, GetForegroundWindow, GetParent, GetWindowTextW,
     GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE,
 };
 
@@ -77,12 +77,57 @@ pub fn is_process_alive(pid: u32) -> bool {
 /// Enumerate visible top-level windows for the given executable and return
 /// (pid, window_title) pairs. Processes with no visible titled window are
 /// excluded — equivalent to tasklist's `WINDOWTITLE ne N/A` filter.
+///
+/// Classic console processes (cmd.exe, powershell.exe) don't own their own
+/// top-level window — conhost.exe (a child process) hosts the visible console
+/// window instead. This function includes conhost.exe children in the window
+/// search and re-attributes any matches back to the shell parent PID.
 pub fn query_processes(exe_name: &str) -> Vec<(u32, String)> {
-    let target_pids: HashSet<u32> = find_pids_by_exe(exe_name).into_iter().collect();
+    let target = {
+        let t = exe_name.to_lowercase();
+        if t.ends_with(".exe") {
+            t
+        } else {
+            format!("{}.exe", t)
+        }
+    };
+
+    let proc_map = snapshot_processes();
+
+    let target_pids: HashSet<u32> = proc_map
+        .iter()
+        .filter(|(_, (_, exe))| *exe == target)
+        .map(|(pid, _)| *pid)
+        .collect();
+
     if target_pids.is_empty() {
         return vec![];
     }
-    collect_windows_for_pids(&target_pids)
+
+    // On Windows 10/11, classic console windows are hosted by a conhost.exe child,
+    // not the shell itself. Map conhost_pid → shell_pid so we can search for those
+    // windows and attribute them back to the correct process.
+    let conhost_to_shell: HashMap<u32, u32> = proc_map
+        .iter()
+        .filter_map(|(&child_pid, (ppid, exe))| {
+            if exe == "conhost.exe" && target_pids.contains(ppid) {
+                Some((child_pid, *ppid))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let search_pids: HashSet<u32> = target_pids
+        .iter()
+        .copied()
+        .chain(conhost_to_shell.keys().copied())
+        .collect();
+
+    collect_windows_for_pids(&search_pids)
+        .into_iter()
+        .map(|(pid, title)| (conhost_to_shell.get(&pid).copied().unwrap_or(pid), title))
+        .collect()
 }
 
 /// Focus the window belonging to the given PID using three strategies:
