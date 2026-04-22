@@ -1,4 +1,4 @@
-//! `zestful test-focus` — cycle through all detected terminal/browser URIs with focus.
+//! `zestful test-focus` — cycle through all detected terminal/browser/IDE URIs with focus.
 
 use anyhow::Result;
 
@@ -30,6 +30,13 @@ pub fn run(app: Option<String>) -> Result<()> {
                         &p.app,
                         p.window_id.as_deref(),
                         p.tab_id.as_deref(),
+                    )
+                    .await
+                } else if is_ide_app(&p.app) {
+                    crate::workspace::ides::handle_focus(
+                        &p.app,
+                        p.project_id.as_deref(),
+                        p.terminal_id.as_deref(),
                     )
                     .await
                 } else {
@@ -80,10 +87,41 @@ fn collect_uris(filter: &str) -> Result<Vec<String>> {
             .filter_map(|tab| tab.uri.clone()),
     );
 
+    // IDE projects — match on display name or URI slug (e.g. "vscode" matches "Visual Studio Code")
+    let ides = crate::workspace::inspect_ides()?;
+    uris.extend(
+        ides.iter()
+            .filter(|i| ide_matches_filter(&i.app, filter))
+            .flat_map(|i| i.projects.iter())
+            .filter_map(|p| p.uri.clone()),
+    );
+
     Ok(uris)
 }
 
 fn is_browser_app(app: &str) -> bool {
     let lower = app.to_lowercase();
     lower.contains("chrome") || lower.contains("safari") || lower.contains("firefox")
+}
+
+fn is_ide_app(app: &str) -> bool {
+    let lower = app.to_lowercase();
+    lower == "vscode"
+        || lower == "cursor"
+        || lower == "windsurf"
+        || lower == "xcode"
+        || lower == "zed"
+        || lower.contains("visual studio code")
+}
+
+fn ide_matches_filter(app: &str, filter: &str) -> bool {
+    let lower = app.to_lowercase();
+    if lower.contains(filter) {
+        return true;
+    }
+    // Also match common slugs: "vscode" → "Visual Studio Code"
+    match filter {
+        "vscode" => lower.contains("visual studio code"),
+        _ => false,
+    }
 }

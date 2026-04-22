@@ -7,7 +7,6 @@
 //! as it does not depend on file-lock inspection or modification times.
 
 use anyhow::Result;
-use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::fs;
@@ -50,10 +49,12 @@ pub enum Family {
 
 impl Family {
     fn cli_name(self) -> &'static str {
+        // Use the .cmd wrapper, not the main .exe — only the wrapper knows how
+        // to IPC into the already-running instance for --reuse-window.
         match self {
-            Family::VSCode => "code",
-            Family::Cursor => "cursor",
-            Family::Windsurf => "windsurf",
+            Family::VSCode => "code.cmd",
+            Family::Cursor => "cursor.cmd",
+            Family::Windsurf => "windsurf.cmd",
         }
     }
     fn url_scheme(self) -> &'static str {
@@ -188,60 +189,52 @@ pub async fn focus(family: Family, project_id: Option<&str>) -> Result<()> {
 }
 
 fn focus_sync(family: Family, project_id: Option<&str>) -> Result<()> {
+    let cli = family.cli_name();
     if let Some(id) = project_id {
         if let Some(path) = lookup_project_path(family, id) {
-            let cli = family.cli_name();
-            let ok = Command::new(cli)
-                .args(["--reuse-window", &path])
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-            if ok {
-                return Ok(());
-            }
+            // Run the CLI via cmd.exe so that .cmd wrappers (e.g. cursor.cmd)
+            // are resolved correctly. --reuse-window signals the already-running
+            // instance via IPC to focus the matching window — no new window opens.
             let _ = Command::new("cmd")
-                .args(["/c", "start", "", cli, "--reuse-window", &path])
+                .args(["/c", cli, "--reuse-window", &path])
                 .status();
             return Ok(());
         }
     }
-    let _ = Command::new("cmd")
-        .args(["/c", "start", "", family.cli_name()])
-        .status();
+    // No project id or unresolved: focus the editor without opening a specific path.
+    let _ = Command::new("cmd").args(["/c", cli]).status();
     Ok(())
 }
 
-#[derive(Deserialize)]
-struct WorkspaceFile {
-    folder: Option<String>,
-    workspace: Option<String>,
-}
-
+/// Look up the filesystem path for a currently-open project by name.
+/// Reads from storage.json so only live windows are considered.
 fn lookup_project_path(family: Family, project_name: &str) -> Option<String> {
-    let storage = appdata_dir()?
+    let storage_json = appdata_dir()?
         .join(family.appdata_dir())
         .join("User")
-        .join("workspaceStorage");
-    let entries = fs::read_dir(&storage).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let ws_json = path.join("workspace.json");
-        let Ok(contents) = fs::read_to_string(&ws_json) else {
-            continue;
-        };
-        let Ok(parsed) = serde_json::from_str::<WorkspaceFile>(&contents) else {
-            continue;
-        };
-        let Some(uri) = parsed.folder.or(parsed.workspace) else {
-            continue;
-        };
-        let decoded = decode_vscode_uri(&uri);
-        let name = PathBuf::from(&decoded)
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default();
-        if name == project_name {
-            return Some(decoded);
+        .join("globalStorage")
+        .join("storage.json");
+    let contents = fs::read_to_string(&storage_json).ok()?;
+    let root: Value = serde_json::from_str(&contents).ok()?;
+    let ws = root.get("windowsState")?;
+
+    let last = ws.get("lastActiveWindow").into_iter();
+    let opened = ws
+        .get("openedWindows")
+        .and_then(|w| w.as_array())
+        .map(|a| a.iter())
+        .into_iter()
+        .flatten();
+
+    for win in last.chain(opened) {
+        if let Some(path) = window_folder(win) {
+            let name = PathBuf::from(&path)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if name == project_name {
+                return Some(path);
+            }
         }
     }
     None
