@@ -84,62 +84,12 @@ pub fn get_cwds_batch(pids: &[u32]) -> std::collections::HashMap<u32, String> {
     map
 }
 
-/// Query tasklist for a named executable and return (pid, window_title) pairs.
-/// Filters out processes with no console window (WINDOWTITLE eq N/A) so that
-/// non-interactive subprocesses (e.g. `cmd /c …`) are excluded.
+/// Enumerate visible top-level windows for the named executable and return
+/// (pid, window_title) pairs. Processes with no visible titled window are
+/// excluded — equivalent to tasklist's `WINDOWTITLE ne N/A` filter.
 #[cfg(target_os = "windows")]
 pub fn query_tasklist(exe_name: &str) -> Vec<(u32, String)> {
-    let output = Command::new("tasklist")
-        .args([
-            "/fi",
-            &format!("imagename eq {}", exe_name),
-            "/fi",
-            "WINDOWTITLE ne N/A",
-            "/fo",
-            "csv",
-            "/v",
-            "/nh",
-        ])
-        .output();
-
-    let output = match output {
-        Ok(o) if o.status.success() => o,
-        _ => return vec![],
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut results = Vec::new();
-
-    for line in stdout.lines() {
-        let line = line.trim();
-        if !line.starts_with('"') {
-            continue;
-        }
-
-        let stripped = line.strip_prefix('"').unwrap_or(line).trim_end_matches('"');
-        let fields: Vec<&str> = stripped.split("\",\"").collect();
-
-        if fields.len() < 9 {
-            continue;
-        }
-
-        let pid: u32 = match fields[1].parse() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-
-        // OleMainThreadWndName is an invisible COM message window, not a real console.
-        let title = fields[8].trim();
-        let title = if title == "OleMainThreadWndName" {
-            String::new()
-        } else {
-            title.to_string()
-        };
-
-        results.push((pid, title));
-    }
-
-    results
+    crate::workspace::win32::query_processes(exe_name)
 }
 
 /// Given a tty name (e.g. "/dev/ttys000" or "ttys000"), find the shell process and its PID.
@@ -182,50 +132,11 @@ pub fn get_shell_for_tty(tty: &str) -> Option<(u32, String)> {
 
 /// Find PIDs of a process by name.
 /// On macOS, tries System Events (AppleScript) first for GUI apps, then falls back to pgrep.
-/// On Windows, uses tasklist. On Linux, uses pgrep directly.
+/// On Windows, uses the Win32 process snapshot API. On Linux, uses pgrep.
 pub fn find_pids_by_name(name: &str) -> Vec<u32> {
     #[cfg(target_os = "windows")]
     {
-        let exe_name = if name.ends_with(".exe") {
-            name.to_string()
-        } else {
-            format!("{}.exe", name)
-        };
-
-        let output = Command::new("tasklist")
-            .args([
-                "/fi",
-                &format!("imagename eq {}", exe_name),
-                "/fo",
-                "csv",
-                "/nh",
-            ])
-            .output();
-
-        let output = match output {
-            Ok(o) if o.status.success() => o,
-            _ => return vec![],
-        };
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut pids = Vec::new();
-
-        for line in stdout.lines() {
-            let line = line.trim();
-            if !line.starts_with('"') {
-                continue;
-            }
-            // CSV: "ImageName","PID",...
-            let stripped = line.strip_prefix('"').unwrap_or(line).trim_end_matches('"');
-            let fields: Vec<&str> = stripped.split("\",\"").collect();
-            if fields.len() >= 2 {
-                if let Ok(pid) = fields[1].parse::<u32>() {
-                    pids.push(pid);
-                }
-            }
-        }
-
-        return pids;
+        return crate::workspace::win32::find_pids_by_exe(name);
     }
 
     #[cfg(target_os = "macos")]

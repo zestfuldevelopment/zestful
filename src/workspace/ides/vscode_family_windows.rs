@@ -13,6 +13,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::workspace::win32;
+
 use crate::workspace::types::{IdeInstance, IdeProject};
 
 struct AppSpec {
@@ -84,7 +86,7 @@ pub fn detect_all() -> Result<Vec<IdeInstance>> {
 }
 
 fn detect_one(spec: &AppSpec) -> Option<IdeInstance> {
-    let pid = tasklist_pid(spec.process_name)?;
+    let pid = win32::first_pid_by_exe(spec.process_name)?;
     let storage_json = appdata_dir()?
         .join(spec.appdata_dir)
         .join("User")
@@ -233,32 +235,6 @@ fn lookup_project_path(family: Family, project_name: &str) -> Option<String> {
             if name == project_name {
                 return Some(path);
             }
-        }
-    }
-    None
-}
-
-/// Find the PID of the first process matching `exe_name` via `tasklist`.
-fn tasklist_pid(exe_name: &str) -> Option<u32> {
-    let output = Command::new("tasklist")
-        .args([
-            "/fi",
-            &format!("imagename eq {}", exe_name),
-            "/fo",
-            "csv",
-            "/nh",
-        ])
-        .output()
-        .ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        // CSV: "Code.exe","1234","Console","1","50,000 K"
-        let mut fields = line.splitn(5, ',');
-        let _name = fields.next()?;
-        let pid_field = fields.next()?;
-        let pid_str = pid_field.trim_matches('"');
-        if let Ok(pid) = pid_str.parse::<u32>() {
-            return Some(pid);
         }
     }
     None

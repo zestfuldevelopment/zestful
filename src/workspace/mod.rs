@@ -11,6 +11,8 @@ pub mod process;
 pub mod terminals;
 mod types;
 pub mod uri;
+#[cfg(target_os = "windows")]
+pub mod win32;
 
 pub use locate::{find_active_codex_editor, locate};
 pub use types::*;

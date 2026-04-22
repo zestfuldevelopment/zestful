@@ -153,30 +153,7 @@ fn libc_kill(pid: i32) -> bool {
     }
     #[cfg(target_os = "windows")]
     {
-        // Use tasklist to check if the PID is still alive.
-        let output = Command::new("tasklist")
-            .args([
-                "/fi",
-                &format!("pid eq {}", pid),
-                "/fo",
-                "csv",
-                "/nh",
-            ])
-            .output();
-        match output {
-            Ok(o) => {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                stdout.lines().any(|line| {
-                    let mut fields = line.splitn(5, ',');
-                    fields.next(); // image name
-                    fields
-                        .next()
-                        .and_then(|f| f.trim_matches('"').parse::<i32>().ok())
-                        == Some(pid)
-                })
-            }
-            Err(_) => false,
-        }
+        crate::workspace::win32::is_process_alive(pid as u32)
     }
     #[cfg(not(any(unix, target_os = "windows")))]
     {

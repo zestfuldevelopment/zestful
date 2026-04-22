@@ -1,0 +1,247 @@
+//! Direct Win32 API wrappers for process enumeration and window focus.
+//!
+//! Replaces PowerShell subprocesses and runtime C# compilation (Add-Type)
+//! for all process-query and window-focus operations on Windows.
+
+use std::collections::{HashMap, HashSet};
+
+use windows_sys::Win32::Foundation::{
+    CloseHandle, BOOL, FALSE, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, TRUE,
+};
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
+use windows_sys::Win32::System::Threading::{AttachThreadInput, OpenProcess, PROCESS_SYNCHRONIZE};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    BringWindowToTop, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowTextW,
+    GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE,
+};
+
+/// Snapshot all running processes.
+/// Returns map of pid → (parent_pid, exe_name_lowercase).
+pub fn snapshot_processes() -> HashMap<u32, (u32, String)> {
+    let mut map = HashMap::new();
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE {
+            return map;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        if Process32FirstW(snap, &mut entry) != FALSE {
+            loop {
+                let exe = wcs_to_string(&entry.szExeFile).to_lowercase();
+                map.insert(entry.th32ProcessID, (entry.th32ParentProcessID, exe));
+                if Process32NextW(snap, &mut entry) == FALSE {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snap);
+    }
+    map
+}
+
+/// Find all PIDs whose executable name matches (case-insensitive, .exe suffix optional).
+pub fn find_pids_by_exe(exe_name: &str) -> Vec<u32> {
+    let target = exe_name.to_lowercase();
+    let target = if target.ends_with(".exe") {
+        target
+    } else {
+        format!("{}.exe", target)
+    };
+    snapshot_processes()
+        .into_iter()
+        .filter(|(_, (_, exe))| *exe == target)
+        .map(|(pid, _)| pid)
+        .collect()
+}
+
+/// Return the first PID for a named executable, or None.
+pub fn first_pid_by_exe(exe_name: &str) -> Option<u32> {
+    find_pids_by_exe(exe_name).into_iter().next()
+}
+
+/// Check whether a process with the given PID is alive by opening a handle.
+pub fn is_process_alive(pid: u32) -> bool {
+    unsafe {
+        let h: HANDLE = OpenProcess(PROCESS_SYNCHRONIZE, FALSE, pid);
+        if h == 0 {
+            return false;
+        }
+        CloseHandle(h);
+        true
+    }
+}
+
+/// Enumerate visible top-level windows for the given executable and return
+/// (pid, window_title) pairs. Processes with no visible titled window are
+/// excluded — equivalent to tasklist's `WINDOWTITLE ne N/A` filter.
+pub fn query_processes(exe_name: &str) -> Vec<(u32, String)> {
+    let target_pids: HashSet<u32> = find_pids_by_exe(exe_name).into_iter().collect();
+    if target_pids.is_empty() {
+        return vec![];
+    }
+    collect_windows_for_pids(&target_pids)
+}
+
+/// Focus the window belonging to the given PID using three strategies:
+///
+/// 1. Direct window or conhost.exe child — standalone console on Win10/11.
+/// 2. Parent-chain walk for windowsterminal.exe/openconsole.exe — WT "New Tab".
+/// 3. Any visible windowsterminal.exe window — Win11 defterm interception.
+///
+/// AttachThreadInput bypasses the Windows 11 foreground lock.
+pub fn focus_by_pid(pid: u32) {
+    let proc_map = snapshot_processes();
+
+    // Candidate PIDs: the target process + its conhost.exe children.
+    let mut candidate_pids: HashSet<u32> = HashSet::new();
+    candidate_pids.insert(pid);
+    for (&child_pid, (ppid, exe)) in &proc_map {
+        if *ppid == pid && exe == "conhost.exe" {
+            candidate_pids.insert(child_pid);
+        }
+    }
+
+    // Strategy 1.
+    let mut hwnd = find_visible_window(&candidate_pids);
+
+    // Strategy 2: walk parent chain.
+    if hwnd == 0 {
+        let mut cur = pid;
+        'walk: for _ in 0..4 {
+            match proc_map.get(&cur) {
+                Some((ppid, _)) if *ppid != 0 => {
+                    cur = *ppid;
+                    if let Some((_, exe)) = proc_map.get(&cur) {
+                        if exe == "windowsterminal.exe" || exe == "openconsole.exe" {
+                            let mut s = HashSet::new();
+                            s.insert(cur);
+                            hwnd = find_visible_window(&s);
+                            if hwnd != 0 {
+                                break 'walk;
+                            }
+                        }
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+
+    // Strategy 3: any windowsterminal.exe window.
+    if hwnd == 0 {
+        let wt_pids: HashSet<u32> = proc_map
+            .iter()
+            .filter(|(_, (_, exe))| exe == "windowsterminal.exe")
+            .map(|(pid, _)| *pid)
+            .collect();
+        if !wt_pids.is_empty() {
+            hwnd = find_visible_window(&wt_pids);
+        }
+    }
+
+    if hwnd != 0 {
+        raise_window(hwnd);
+    }
+}
+
+/// Bring a window to the foreground.
+/// Uses AttachThreadInput to bypass the Windows 11 foreground lock.
+pub fn raise_window(hwnd: HWND) {
+    unsafe {
+        ShowWindow(hwnd, SW_RESTORE);
+        let fg = GetForegroundWindow();
+        let mut dummy: u32 = 0;
+        let fg_thread = GetWindowThreadProcessId(fg, &mut dummy);
+        let tgt_thread = GetWindowThreadProcessId(hwnd, &mut dummy);
+        if fg_thread != tgt_thread {
+            AttachThreadInput(fg_thread, tgt_thread, TRUE);
+        }
+        SetForegroundWindow(hwnd);
+        BringWindowToTop(hwnd);
+        if fg_thread != tgt_thread {
+            AttachThreadInput(fg_thread, tgt_thread, FALSE);
+        }
+    }
+}
+
+// ── internal helpers ───────────────────────────────────────────────────────────
+
+struct FindWindowState {
+    pids: *const HashSet<u32>,
+    result: HWND,
+}
+
+unsafe extern "system" fn find_window_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let state = &mut *(lparam as *mut FindWindowState);
+    if IsWindowVisible(hwnd) == FALSE {
+        return TRUE;
+    }
+    let mut pid: u32 = 0;
+    GetWindowThreadProcessId(hwnd, &mut pid);
+    if (*state.pids).contains(&pid) {
+        state.result = hwnd;
+        return FALSE; // stop enumeration
+    }
+    TRUE
+}
+
+fn find_visible_window(pids: &HashSet<u32>) -> HWND {
+    let mut state = FindWindowState {
+        pids: pids as *const _,
+        result: 0,
+    };
+    unsafe {
+        EnumWindows(Some(find_window_cb), &mut state as *mut _ as LPARAM);
+    }
+    state.result
+}
+
+struct CollectState {
+    pids: *const HashSet<u32>,
+    seen: HashMap<u32, String>,
+}
+
+unsafe extern "system" fn collect_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let state = &mut *(lparam as *mut CollectState);
+    if IsWindowVisible(hwnd) == FALSE {
+        return TRUE;
+    }
+    let mut pid: u32 = 0;
+    GetWindowThreadProcessId(hwnd, &mut pid);
+    if !(*state.pids).contains(&pid) || state.seen.contains_key(&pid) {
+        return TRUE;
+    }
+    // Skip COM message-only windows.
+    let mut cls = [0u16; 128];
+    GetClassNameW(hwnd, cls.as_mut_ptr(), cls.len() as i32);
+    if wcs_to_string(&cls) == "OleMainThreadWndName" {
+        return TRUE;
+    }
+    let mut buf = [0u16; 512];
+    let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+    if len <= 0 {
+        return TRUE;
+    }
+    let title = String::from_utf16_lossy(&buf[..len as usize]);
+    state.seen.insert(pid, title);
+    TRUE
+}
+
+fn collect_windows_for_pids(pids: &HashSet<u32>) -> Vec<(u32, String)> {
+    let mut state = CollectState {
+        pids: pids as *const _,
+        seen: HashMap::new(),
+    };
+    unsafe {
+        EnumWindows(Some(collect_cb), &mut state as *mut _ as LPARAM);
+    }
+    state.seen.into_iter().collect()
+}
+
+fn wcs_to_string(wcs: &[u16]) -> String {
+    let end = wcs.iter().position(|&c| c == 0).unwrap_or(wcs.len());
+    String::from_utf16_lossy(&wcs[..end])
+}
