@@ -149,6 +149,28 @@
       },
       "args": ["test-focus", "--app", "chrome"],
       "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "test-focus (VS Code)",
+      "preLaunchTask": "kill-zestful",
+      "cargo": {
+        "args": ["build", "--bin=zestful"]
+      },
+      "args": ["test-focus", "--app", "vscode"],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "test-focus (Cursor)",
+      "preLaunchTask": "kill-zestful",
+      "cargo": {
+        "args": ["build", "--bin=zestful"]
+      },
+      "args": ["test-focus", "--app", "cursor"],
+      "cwd": "${workspaceFolder}"
     }
   ]
 }
