@@ -30,6 +30,8 @@ pub fn capture() -> Option<HashMap<String, String>> {
     if out.is_empty() { None } else { Some(out) }
 }
 
+/// Truncate at a UTF-8 char boundary to avoid panicking on mid-codepoint
+/// splits. Returns the original value if within limit.
 fn truncate(value: String) -> String {
     if value.len() <= MAX_VALUE_BYTES { return value; }
     let mut end = MAX_VALUE_BYTES;
@@ -50,16 +52,34 @@ mod tests {
         }
     }
 
+    fn save_whitelist() -> Vec<(&'static str, Option<String>)> {
+        WHITELIST.iter().map(|&name| (name, std::env::var(name).ok())).collect()
+    }
+
+    fn restore_whitelist(saved: Vec<(&'static str, Option<String>)>) {
+        for (name, prior) in saved {
+            unsafe {
+                match prior {
+                    Some(v) => std::env::set_var(name, v),
+                    None    => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
     #[test]
     #[serial]
     fn capture_returns_none_when_no_whitelisted_vars_set() {
+        let saved = save_whitelist();
         unset_all_whitelist();
         assert_eq!(capture(), None);
+        restore_whitelist(saved);
     }
 
     #[test]
     #[serial]
     fn capture_returns_subset_of_whitelist() {
+        let saved = save_whitelist();
         unset_all_whitelist();
         unsafe {
             std::env::set_var("CLAUDE_PROJECT_DIR", "/x");
@@ -69,24 +89,23 @@ mod tests {
         assert_eq!(got.len(), 2);
         assert_eq!(got.get("CLAUDE_PROJECT_DIR").map(String::as_str), Some("/x"));
         assert_eq!(got.get("TMUX").map(String::as_str), Some("/t"));
-        unsafe {
-            std::env::remove_var("CLAUDE_PROJECT_DIR");
-            std::env::remove_var("TMUX");
-        }
+        restore_whitelist(saved);
     }
 
     #[test]
     #[serial]
     fn capture_skips_empty_values() {
+        let saved = save_whitelist();
         unset_all_whitelist();
         unsafe { std::env::set_var("TMUX", ""); }
         assert_eq!(capture(), None);
-        unsafe { std::env::remove_var("TMUX"); }
+        restore_whitelist(saved);
     }
 
     #[test]
     #[serial]
     fn capture_truncates_oversized_values() {
+        let saved = save_whitelist();
         unset_all_whitelist();
         let big = "x".repeat(10_000);
         unsafe { std::env::set_var("CLAUDE_PROJECT_DIR", &big); }
@@ -95,7 +114,7 @@ mod tests {
         assert!(v.ends_with(TRUNCATION_SUFFIX), "value should end with truncation suffix");
         assert!(v.len() <= MAX_VALUE_BYTES + TRUNCATION_SUFFIX.len(),
                 "truncated value should be <= cap + suffix bytes, got {}", v.len());
-        unsafe { std::env::remove_var("CLAUDE_PROJECT_DIR"); }
+        restore_whitelist(saved);
     }
 
     #[test]
@@ -113,6 +132,8 @@ mod tests {
 
     #[test]
     fn whitelist_matches_spec() {
+        // Canonical list in:
+        //   zestful-internal/docs/superpowers/specs/2026-04-22-env-vars-observed-design.md
         assert_eq!(WHITELIST, &[
             "CLAUDE_PROJECT_DIR", "GEMINI_PROJECT_DIR", "CLAUDECODE",
             "TERM_PROGRAM", "TERM_PROGRAM_VERSION",
