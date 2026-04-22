@@ -271,18 +271,45 @@ fn correlation_from(payload: &Value) -> Option<Correlation> {
     })
 }
 
+/// Pick the most stable "workspace root" for this event.
+///
+/// Claude Code's hook payload only carries the agent's *current* working
+/// directory (which moves when the agent `cd`s or reads files in subdirs).
+/// That's not what we want for `workspace_root` — we want the stable project
+/// root the session was started in. Resolution order:
+///
+/// 1. `payload.workspace_roots[0]` — Cursor sends this directly.
+/// 2. `$CLAUDE_PROJECT_DIR` — set by Claude Code for hook subprocesses.
+/// 3. `cwd` — last resort; matches legacy behavior for unknown agents.
+fn resolve_workspace_root(
+    agent: AgentKind,
+    payload: &Value,
+    cwd: Option<&str>,
+) -> Option<String> {
+    if let Some(root) = payload
+        .get("workspace_roots")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.as_str())
+    {
+        return Some(root.to_string());
+    }
+    if agent == AgentKind::ClaudeCode {
+        if let Ok(v) = std::env::var("CLAUDE_PROJECT_DIR") {
+            if !v.is_empty() {
+                return Some(v);
+            }
+        }
+    }
+    cwd.map(String::from)
+}
+
 fn context_from(agent: AgentKind, payload: &Value) -> Option<Context> {
     let cwd = payload
         .get("cwd")
         .and_then(|v| v.as_str())
         .map(String::from);
-    let workspace_root = payload
-        .get("workspace_roots")
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .or_else(|| cwd.clone());
+    let workspace_root = resolve_workspace_root(agent, payload, cwd.as_deref());
     let project = workspace_root
         .as_deref()
         .and_then(|p| std::path::Path::new(p).file_name())
@@ -570,5 +597,69 @@ mod tests {
         assert_eq!(obj["schema"].as_u64(), Some(1));
         assert_eq!(obj["id"].as_str().map(|s| s.len()), Some(26));
         assert!(obj["type"].is_string());
+    }
+
+    // Tests below depend on `CLAUDE_PROJECT_DIR` env var state and so must
+    // run single-threaded (already enforced crate-wide via --test-threads=1).
+    #[test]
+    fn resolve_workspace_root_prefers_env_var_for_claude_code() {
+        let prior = std::env::var("CLAUDE_PROJECT_DIR").ok();
+        std::env::set_var("CLAUDE_PROJECT_DIR", "/Users/test/project-root");
+        let payload = json!({ "hook_event_name": "PreToolUse", "cwd": "/Users/test/project-root/sub/dir" });
+        let root = resolve_workspace_root(
+            AgentKind::ClaudeCode,
+            &payload,
+            Some("/Users/test/project-root/sub/dir"),
+        );
+        // Restore env before asserting so a failure doesn't leak state.
+        match prior {
+            Some(v) => std::env::set_var("CLAUDE_PROJECT_DIR", v),
+            None => std::env::remove_var("CLAUDE_PROJECT_DIR"),
+        }
+        assert_eq!(root.as_deref(), Some("/Users/test/project-root"));
+    }
+
+    #[test]
+    fn resolve_workspace_root_falls_back_to_cwd_when_env_unset() {
+        let prior = std::env::var("CLAUDE_PROJECT_DIR").ok();
+        std::env::remove_var("CLAUDE_PROJECT_DIR");
+        let payload = json!({ "hook_event_name": "PreToolUse", "cwd": "/tmp/nowhere" });
+        let root = resolve_workspace_root(
+            AgentKind::ClaudeCode,
+            &payload,
+            Some("/tmp/nowhere"),
+        );
+        if let Some(v) = prior { std::env::set_var("CLAUDE_PROJECT_DIR", v); }
+        assert_eq!(root.as_deref(), Some("/tmp/nowhere"));
+    }
+
+    #[test]
+    fn resolve_workspace_root_prefers_payload_roots_over_env() {
+        let prior = std::env::var("CLAUDE_PROJECT_DIR").ok();
+        std::env::set_var("CLAUDE_PROJECT_DIR", "/should-not-win");
+        let payload = json!({
+            "hook_event_name": "beforeSubmitPrompt",
+            "workspace_roots": ["/cursor/says/this"],
+            "cwd": "/whatever",
+        });
+        let root = resolve_workspace_root(AgentKind::Cursor, &payload, Some("/whatever"));
+        match prior {
+            Some(v) => std::env::set_var("CLAUDE_PROJECT_DIR", v),
+            None => std::env::remove_var("CLAUDE_PROJECT_DIR"),
+        }
+        assert_eq!(root.as_deref(), Some("/cursor/says/this"));
+    }
+
+    #[test]
+    fn resolve_workspace_root_ignores_env_for_non_claude_agents() {
+        let prior = std::env::var("CLAUDE_PROJECT_DIR").ok();
+        std::env::set_var("CLAUDE_PROJECT_DIR", "/claude-project-root");
+        let payload = json!({ "hook_event_name": "SessionStart", "cwd": "/codex/cwd" });
+        let root = resolve_workspace_root(AgentKind::CodexCli, &payload, Some("/codex/cwd"));
+        match prior {
+            Some(v) => std::env::set_var("CLAUDE_PROJECT_DIR", v),
+            None => std::env::remove_var("CLAUDE_PROJECT_DIR"),
+        }
+        assert_eq!(root.as_deref(), Some("/codex/cwd"));
     }
 }
