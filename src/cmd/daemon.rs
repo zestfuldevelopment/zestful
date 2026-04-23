@@ -79,6 +79,14 @@ async fn run_server() -> Result<()> {
     }
     fs::write(&pid_file, std::process::id().to_string())?;
 
+    // Initialize the local event store. Migration failure is fatal —
+    // a half-migrated DB is worse than a dead daemon.
+    let db_path = config::config_dir().join("events.db");
+    if let Err(e) = crate::events::store::init(&db_path) {
+        crate::log::log("events", &format!("FATAL: store init failed: {}", e));
+        std::process::exit(1);
+    }
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/focus", post(handle_focus))
@@ -86,7 +94,9 @@ async fn run_server() -> Result<()> {
         .layer(DefaultBodyLimit::max(16_384)) // 16 KB default
         .route(
             "/events",
-            post(handle_events).layer(DefaultBodyLimit::max(256 * 1024)),
+            post(handle_events)
+                .get(handle_list_events)
+                .layer(DefaultBodyLimit::max(256 * 1024)),
         );
 
     let port = config::daemon_port();
@@ -309,8 +319,33 @@ async fn handle_events(
         }
     }
 
-    // Accept. Log one line per event.
+    // Accept. Persist + log one line per event.
     for env in &envelopes {
+        // Sync persist to local store. A 200 response means the event is
+        // durably on disk. I/O failure here is a hard error — return 500.
+        let outcome = {
+            let c = crate::events::store::conn().lock().unwrap();
+            match crate::events::store::write::insert(&c, env) {
+                Ok(o) => o,
+                Err(e) => {
+                    crate::log::log("events", &format!("store insert failed: {}", e));
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": "local store write failed",
+                            "detail": e.to_string(),
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+        };
+
+        // Trigger a prune check every PRUNE_CHECK_EVERY inserts.
+        crate::events::store::record_insert_and_maybe_prune(
+            crate::events::store::DEFAULT_MAX_BYTES,
+        );
+
         let type_ = env.get("type").and_then(|v| v.as_str()).unwrap_or("?");
         let id = env.get("id").and_then(|v| v.as_str()).unwrap_or("?");
         let source = env.get("source").and_then(|v| v.as_str()).unwrap_or("?");
@@ -319,11 +354,15 @@ async fn handle_events(
             .and_then(|c| c.get("session_id"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
+        let outcome_label = match outcome {
+            crate::events::store::write::InsertOutcome::Inserted(rowid) => format!("rowid={}", rowid),
+            crate::events::store::write::InsertOutcome::DuplicateIgnored => "dup".to_string(),
+        };
         crate::log::log(
             "events",
             &format!(
-                "accepted id={} type={} source={} session={}",
-                id, type_, source, session_id
+                "accepted id={} type={} source={} session={} {}",
+                id, type_, source, session_id, outcome_label
             ),
         );
     }
@@ -340,6 +379,85 @@ async fn handle_events(
         }),
     )
         .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct EventsQuery {
+    #[serde(default)]
+    since: Option<i64>,
+    #[serde(default)]
+    until: Option<i64>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default, rename = "type")]
+    event_type: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn handle_list_events(
+    headers: axum::http::HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<EventsQuery>,
+) -> impl axum::response::IntoResponse {
+    // Same token gate as POST.
+    let expected = config::read_token();
+    let got = headers
+        .get("x-zestful-token")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+    match (expected, got) {
+        (Some(e), Some(g)) if e == g => {}
+        _ => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "invalid token"})),
+            ).into_response();
+        }
+    }
+
+    let filters = crate::events::store::query::ListFilters {
+        since: q.since,
+        until: q.until,
+        source: q.source,
+        event_type: q.event_type,
+        session_id: q.session_id,
+        agent: q.agent,
+    };
+    let cursor = q.cursor.as_deref()
+        .and_then(crate::events::store::query::Cursor::parse);
+    let limit = q.limit.unwrap_or(50).min(500);
+
+    let result = {
+        let c = crate::events::store::conn().lock().unwrap();
+        crate::events::store::query::list(&c, &filters, limit, cursor)
+    };
+    match result {
+        Ok((rows, next)) => {
+            let next_cursor = next.map(|c| c.to_string());
+            let has_more = next_cursor.is_some();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "events": rows,
+                    "next_cursor": next_cursor,
+                    "has_more": has_more,
+                })),
+            ).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": "query failed",
+                "detail": e.to_string(),
+            })),
+        ).into_response(),
+    }
 }
 
 /// Validate an envelope JSON per spec §Daemon validation rules. Returns
@@ -468,12 +586,29 @@ mod tests {
     }
 
     fn app() -> Router {
+        // Initialize the store lazily on first test. OnceLock in store::init
+        // allows exactly one init per process, so all tests share the same
+        // test DB. Tests that check specific state should DELETE FROM events
+        // or use unique event_id markers.
+        static TEST_STORE_INIT: std::sync::Once = std::sync::Once::new();
+        TEST_STORE_INIT.call_once(|| {
+            let dir = std::env::temp_dir().join(format!("zestful-test-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let db_path = dir.join("events.db");
+            // If a stale DB file exists from a prior test run with the same
+            // pid, remove it so migrations apply clean.
+            let _ = std::fs::remove_file(&db_path);
+            crate::events::store::init(&db_path).expect("test store init");
+        });
+
         Router::new()
             .route("/health", get(health))
             .route("/focus", post(handle_focus))
             .route(
                 "/events",
-                post(handle_events).layer(DefaultBodyLimit::max(256 * 1024)),
+                post(handle_events)
+                    .get(handle_list_events)
+                    .layer(DefaultBodyLimit::max(256 * 1024)),
             )
     }
 
@@ -798,5 +933,104 @@ mod tests {
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["event_index"], 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_events_requires_token() {
+        let _home = HomeGuard::new();
+        set_test_token("tok-get-1");
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/events")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn test_post_then_get_events_roundtrip() {
+        let _home = HomeGuard::new();
+        set_test_token("tok-rt-1");
+
+        // POST one envelope. Use a 26-char ULID-shaped id unique to this test.
+        let envelope = serde_json::json!({
+            "id": "01KPVSROUNDTRIP1AAAAAAAAAA",
+            "schema": 1,
+            "ts": 1_234_567_890_000i64,
+            "seq": 0,
+            "host": "h",
+            "os_user": "u",
+            "device_id": "d",
+            "source": "roundtrip-test-source",
+            "source_pid": 1,
+            "type": "turn.completed"
+        });
+        let post = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/events")
+                    .header("content-type", "application/json")
+                    .header("x-zestful-token", "tok-rt-1")
+                    .body(Body::from(envelope.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(post.status(), StatusCode::OK);
+
+        // GET filtered by source.
+        let get = app()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/events?source=roundtrip-test-source")
+                    .header("x-zestful-token", "tok-rt-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(get.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let events = json["events"].as_array().unwrap();
+        assert!(!events.is_empty(), "expected at least one event");
+        let found = events.iter().any(|e|
+            e["event_id"].as_str() == Some("01KPVSROUNDTRIP1AAAAAAAAAA")
+            && e["source"].as_str() == Some("roundtrip-test-source")
+        );
+        assert!(found, "expected to find the POSTed event, got: {}", json);
+    }
+
+    #[tokio::test]
+    async fn test_get_events_with_nonmatching_filter_returns_empty() {
+        let _home = HomeGuard::new();
+        set_test_token("tok-empty-1");
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/events?source=nonexistent-source-never-used")
+                    .header("x-zestful-token", "tok-empty-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["events"].as_array().unwrap().len(), 0);
+        assert_eq!(json["has_more"], false);
     }
 }
