@@ -12,6 +12,7 @@ pub mod map;
 pub mod payload;
 pub mod preview;
 pub mod send;
+pub mod store;
 
 pub use map::map_hook_payload;
 pub use send::send_to_daemon;
