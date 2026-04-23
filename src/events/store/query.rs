@@ -4,16 +4,31 @@
 use rusqlite::Connection;
 use serde::Serialize;
 
+/// Filters for list / count queries. All fields are optional; each
+/// populated field contributes an `AND` clause to the generated SQL.
 #[derive(Debug, Clone, Default)]
 pub struct ListFilters {
-    pub since: Option<i64>,          // received_at lower bound (inclusive, unix ms)
-    pub until: Option<i64>,          // received_at upper bound (inclusive, unix ms)
+    /// Lower bound on received_at (unix ms, inclusive).
+    pub since: Option<i64>,
+    /// Upper bound on received_at (unix ms, inclusive).
+    pub until: Option<i64>,
+    /// Exact match on the emitter's source slug.
     pub source: Option<String>,
-    pub event_type: Option<String>,  // SQL LIKE pattern allowed (use % wildcards)
+    /// Event type filter. If the value contains a `%`, SQL LIKE is used
+    /// (where `_` also matches a single character, standard SQL semantics).
+    /// Otherwise exact match via `=`. Pass `"turn.%"` to match all turn
+    /// events, pass `"turn.completed"` for the exact name.
+    pub event_type: Option<String>,
+    /// Exact match on correlation.session_id.
     pub session_id: Option<String>,
-    pub agent: Option<String>,       // extracted from context JSON
+    /// Exact match on context.agent via json_extract.
+    pub agent: Option<String>,
 }
 
+/// Opaque pagination cursor. Produced by `list()`, passed back to the
+/// next `list()` call to get the next page. Callers should not
+/// construct values manually — use `parse()` on a string previously
+/// produced by `Display`.
 #[derive(Debug, Clone, Copy)]
 pub struct Cursor {
     pub received_at: i64,
@@ -21,18 +36,20 @@ pub struct Cursor {
 }
 
 impl Cursor {
-    /// Format as `"<received_at>-<id>"` for wire serialization.
-    pub fn to_string(&self) -> String {
-        format!("{}-{}", self.received_at, self.id)
-    }
-
-    /// Parse from `"<received_at>-<id>"`. Returns None on malformed input.
+    /// Parse from the `"<received_at>-<id>"` wire format produced by
+    /// the `Display` impl. Returns None on malformed input.
     pub fn parse(s: &str) -> Option<Self> {
         let (a, b) = s.split_once('-')?;
         Some(Self {
             received_at: a.parse().ok()?,
             id: b.parse().ok()?,
         })
+    }
+}
+
+impl std::fmt::Display for Cursor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}-{}", self.received_at, self.id)
     }
 }
 
@@ -57,12 +74,25 @@ pub struct EventRow {
     pub payload: Option<serde_json::Value>,
 }
 
+/// Read events matching `filters`, ordered newest-first
+/// (`received_at DESC, id DESC`), paginated by cursor.
+///
+/// `limit` is the maximum page size; pass `limit >= 1`. A `limit == 0`
+/// call returns an empty result with no next cursor.
+///
+/// Returns `(rows, next_cursor)`. `next_cursor` is `Some(_)` iff there
+/// are further pages; pass it back into a subsequent call's `cursor`
+/// parameter to get the next page.
 pub fn list(
     conn: &Connection,
     filters: &ListFilters,
     limit: usize,
     cursor: Option<Cursor>,
 ) -> rusqlite::Result<(Vec<EventRow>, Option<Cursor>)> {
+    if limit == 0 {
+        return Ok((Vec::new(), None));
+    }
+
     let mut sql = String::from(
         "SELECT id, received_at, event_id, event_type, source, session_id, project,
                 host, os_user, device_id, event_ts, seq, source_pid, schema_version,
@@ -84,7 +114,14 @@ pub fn list(
         params.push(Box::new(s.clone()));
     }
     if let Some(t) = &filters.event_type {
-        sql.push_str(" AND event_type LIKE ?");
+        // Use LIKE only when the caller explicitly opts in with a '%'.
+        // Otherwise `_` in a literal event name (e.g. "turn.prompt_submitted")
+        // would be treated as a single-char wildcard and silently overmatch.
+        if t.contains('%') {
+            sql.push_str(" AND event_type LIKE ?");
+        } else {
+            sql.push_str(" AND event_type = ?");
+        }
         params.push(Box::new(t.clone()));
     }
     if let Some(s) = &filters.session_id {
@@ -125,12 +162,9 @@ pub fn list(
             seq: row.get(11)?,
             source_pid: row.get(12)?,
             schema_version: row.get(13)?,
-            correlation: row.get::<_, Option<String>>(14)?
-                .and_then(|s| serde_json::from_str(&s).ok()),
-            context: row.get::<_, Option<String>>(15)?
-                .and_then(|s| serde_json::from_str(&s).ok()),
-            payload: row.get::<_, Option<String>>(16)?
-                .and_then(|s| serde_json::from_str(&s).ok()),
+            correlation: parse_json_column(row.get::<_, Option<String>>(14)?, "correlation")?,
+            context: parse_json_column(row.get::<_, Option<String>>(15)?, "context")?,
+            payload: parse_json_column(row.get::<_, Option<String>>(16)?, "payload")?,
         })
     })?;
 
@@ -150,6 +184,8 @@ pub fn list(
     Ok((rows, next_cursor))
 }
 
+/// Count events matching `filters`. Same WHERE clause semantics as
+/// `list()`; does not accept a cursor.
 pub fn count(conn: &Connection, filters: &ListFilters) -> rusqlite::Result<i64> {
     let mut sql = String::from("SELECT COUNT(*) FROM events WHERE 1=1");
     let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -166,7 +202,14 @@ pub fn count(conn: &Connection, filters: &ListFilters) -> rusqlite::Result<i64> 
         params.push(Box::new(s.clone()));
     }
     if let Some(t) = &filters.event_type {
-        sql.push_str(" AND event_type LIKE ?");
+        // Use LIKE only when the caller explicitly opts in with a '%'.
+        // Otherwise `_` in a literal event name (e.g. "turn.prompt_submitted")
+        // would be treated as a single-char wildcard and silently overmatch.
+        if t.contains('%') {
+            sql.push_str(" AND event_type LIKE ?");
+        } else {
+            sql.push_str(" AND event_type = ?");
+        }
         params.push(Box::new(t.clone()));
     }
     if let Some(s) = &filters.session_id {
@@ -179,6 +222,22 @@ pub fn count(conn: &Connection, filters: &ListFilters) -> rusqlite::Result<i64> 
     }
     let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     conn.query_row(&sql, param_refs.as_slice(), |row| row.get(0))
+}
+
+fn parse_json_column(
+    raw: Option<String>,
+    column_name: &'static str,
+) -> rusqlite::Result<Option<serde_json::Value>> {
+    match raw {
+        None => Ok(None),
+        Some(s) => serde_json::from_str(&s).map(Some).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                format!("{} JSON parse error: {}", column_name, e).into(),
+            )
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -318,5 +377,62 @@ mod tests {
         let back = Cursor::parse(&s).unwrap();
         assert_eq!(back.received_at, c.received_at);
         assert_eq!(back.id, c.id);
+    }
+
+    #[test]
+    fn list_filters_by_since_and_until() {
+        let conn = setup();
+        // Insert three rows with slightly different received_at by manually
+        // forcing them apart. Use a small sleep is flaky; easier: insert then
+        // update received_at directly.
+        for i in 0..3 {
+            insert(
+                &conn,
+                &fixture(&format!("{:03}", i), "turn.completed", "claude-code", None, "claude-code"),
+            ).unwrap();
+        }
+        // Override received_at deterministically.
+        conn.execute("UPDATE events SET received_at = 1000 WHERE event_id = '000'", []).unwrap();
+        conn.execute("UPDATE events SET received_at = 2000 WHERE event_id = '001'", []).unwrap();
+        conn.execute("UPDATE events SET received_at = 3000 WHERE event_id = '002'", []).unwrap();
+
+        let f = ListFilters { since: Some(2000), ..Default::default() };
+        let (rows, _) = list(&conn, &f, 50, None).unwrap();
+        assert_eq!(rows.len(), 2);
+
+        let f = ListFilters { until: Some(2000), ..Default::default() };
+        let (rows, _) = list(&conn, &f, 50, None).unwrap();
+        assert_eq!(rows.len(), 2);
+
+        let f = ListFilters { since: Some(2000), until: Some(2000), ..Default::default() };
+        let (rows, _) = list(&conn, &f, 50, None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].event_id, "001");
+    }
+
+    #[test]
+    fn list_exact_match_on_event_type_does_not_wildcard() {
+        let conn = setup();
+        // event_type with an underscore should NOT match other events that
+        // differ only in that character position (SQL LIKE hazard regression).
+        insert(&conn, &fixture("01", "turn.prompt_submitted", "claude-code", None, "claude-code")).unwrap();
+        insert(&conn, &fixture("02", "turn.promptXsubmitted", "claude-code", None, "claude-code")).unwrap();
+
+        let f = ListFilters {
+            event_type: Some("turn.prompt_submitted".into()),
+            ..Default::default()
+        };
+        let (rows, _) = list(&conn, &f, 50, None).unwrap();
+        assert_eq!(rows.len(), 1, "exact match should not wildcard _");
+        assert_eq!(rows[0].event_id, "01");
+    }
+
+    #[test]
+    fn list_limit_zero_returns_empty() {
+        let conn = setup();
+        insert(&conn, &fixture("01", "turn.completed", "claude-code", None, "claude-code")).unwrap();
+        let (rows, next) = list(&conn, &ListFilters::default(), 0, None).unwrap();
+        assert!(rows.is_empty());
+        assert!(next.is_none());
     }
 }
