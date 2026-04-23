@@ -1,14 +1,14 @@
 CREATE TABLE IF NOT EXISTS _schema_migrations (
     version    INTEGER PRIMARY KEY,
-    applied_at INTEGER NOT NULL
+    applied_at INTEGER NOT NULL                         -- Unix ms when this migration ran
 );
 
 CREATE TABLE IF NOT EXISTS events (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    received_at     INTEGER NOT NULL,
+    received_at     INTEGER NOT NULL,                   -- Unix ms when daemon accepted
     event_id        TEXT NOT NULL UNIQUE,
     schema_version  INTEGER NOT NULL,
-    event_ts        INTEGER NOT NULL,
+    event_ts        INTEGER NOT NULL,                   -- Unix ms from the originating agent hook
     seq             INTEGER NOT NULL,
     host            TEXT NOT NULL,
     os_user         TEXT NOT NULL,

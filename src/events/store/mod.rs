@@ -20,7 +20,10 @@ static CONNECTION: OnceLock<Mutex<Connection>> = OnceLock::new();
 
 /// Open the store at `path`, apply migrations, set PRAGMAs.
 ///
-/// Call once on daemon startup. Subsequent calls return an error.
+/// Call once on daemon startup. Calling this more than once per process
+/// PANICS — on a single-process daemon, double-init is a programmer
+/// error, not a recoverable condition.
+///
 /// A migration failure is fatal — caller should log and exit.
 pub fn init(path: &Path) -> rusqlite::Result<()> {
     let conn = Connection::open(path)?;
@@ -30,9 +33,9 @@ pub fn init(path: &Path) -> rusqlite::Result<()> {
     conn.pragma_update(None, "busy_timeout", 5000)?;
     conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
     schema::run_migrations(&conn)?;
-    CONNECTION
-        .set(Mutex::new(conn))
-        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+    if CONNECTION.set(Mutex::new(conn)).is_err() {
+        panic!("events::store::init() called more than once");
+    }
     Ok(())
 }
 
@@ -57,5 +60,11 @@ mod tests {
             .query_row("SELECT MAX(version) FROM _schema_migrations", [], |row| row.get(0))
             .unwrap();
         assert_eq!(version, 1);
+
+        // PRAGMAs should have landed — catch silent WAL downgrades.
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
     }
 }

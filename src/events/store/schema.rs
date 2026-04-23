@@ -87,6 +87,16 @@ mod tests {
             assert!(cols.iter().any(|c| c == expected),
                     "events table missing column {}", expected);
         }
+
+        // Verify all 4 indexes were created.
+        let index_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name='events' AND sql IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(index_count, 4, "expected 4 indexes on events table");
     }
 
     #[test]
@@ -103,5 +113,29 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM _schema_migrations", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn migrations_idempotent_across_reopen() {
+        use tempfile::NamedTempFile;
+        let f = NamedTempFile::new().unwrap();
+
+        // First open + migrate.
+        {
+            let conn = Connection::open(f.path()).unwrap();
+            run_migrations(&conn).unwrap();
+            assert_eq!(current_version(&conn).unwrap(), 1);
+        }
+
+        // Reopen; should be a no-op.
+        {
+            let conn = Connection::open(f.path()).unwrap();
+            run_migrations(&conn).unwrap();
+            assert_eq!(current_version(&conn).unwrap(), 1);
+            let count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM _schema_migrations", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 1);
+        }
     }
 }
