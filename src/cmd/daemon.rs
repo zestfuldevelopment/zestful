@@ -87,17 +87,7 @@ async fn run_server() -> Result<()> {
         std::process::exit(1);
     }
 
-    let app = Router::new()
-        .route("/health", get(health))
-        .route("/focus", post(handle_focus))
-        .route("/inspect", get(handle_inspect))
-        .layer(DefaultBodyLimit::max(16_384)) // 16 KB default
-        .route(
-            "/events",
-            post(handle_events)
-                .get(handle_list_events)
-                .layer(DefaultBodyLimit::max(256 * 1024)),
-        );
+    let app = build_router();
 
     let port = config::daemon_port();
     let addr = format!("127.0.0.1:{}", port);
@@ -323,21 +313,26 @@ async fn handle_events(
     for env in &envelopes {
         // Sync persist to local store. A 200 response means the event is
         // durably on disk. I/O failure here is a hard error — return 500.
-        let outcome = {
+        let env_clone = env.clone();
+        let insert_result = tokio::task::spawn_blocking(move || {
             let c = crate::events::store::conn().lock().unwrap();
-            match crate::events::store::write::insert(&c, env) {
-                Ok(o) => o,
-                Err(e) => {
-                    crate::log::log("events", &format!("store insert failed: {}", e));
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({
-                            "error": "local store write failed",
-                            "detail": e.to_string(),
-                        })),
-                    )
-                        .into_response();
-                }
+            crate::events::store::write::insert(&c, &env_clone)
+        })
+        .await
+        .expect("store insert task panicked");
+
+        let outcome = match insert_result {
+            Ok(o) => o,
+            Err(e) => {
+                crate::log::log("events", &format!("store insert failed: {}", e));
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": "local store write failed",
+                        "detail": e.to_string(),
+                    })),
+                )
+                    .into_response();
             }
         };
 
@@ -433,10 +428,12 @@ async fn handle_list_events(
         .and_then(crate::events::store::query::Cursor::parse);
     let limit = q.limit.unwrap_or(50).min(500);
 
-    let result = {
+    let result = tokio::task::spawn_blocking(move || {
         let c = crate::events::store::conn().lock().unwrap();
         crate::events::store::query::list(&c, &filters, limit, cursor)
-    };
+    })
+    .await
+    .expect("query task panicked");
     match result {
         Ok((rows, next)) => {
             let next_cursor = next.map(|c| c.to_string());
@@ -507,6 +504,22 @@ fn validate_envelope(v: &serde_json::Value) -> std::result::Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Build the full daemon router. Shared between production startup in
+/// `run_server` and the test `app()` helper so the two can't drift.
+fn build_router() -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .route("/focus", post(handle_focus))
+        .route("/inspect", get(handle_inspect))
+        .layer(DefaultBodyLimit::max(16_384))
+        .route(
+            "/events",
+            post(handle_events)
+                .get(handle_list_events)
+                .layer(DefaultBodyLimit::max(256 * 1024)),
+        )
 }
 
 async fn shutdown_signal(pid_file: std::path::PathBuf) {
@@ -586,30 +599,18 @@ mod tests {
     }
 
     fn app() -> Router {
-        // Initialize the store lazily on first test. OnceLock in store::init
-        // allows exactly one init per process, so all tests share the same
-        // test DB. Tests that check specific state should DELETE FROM events
-        // or use unique event_id markers.
         static TEST_STORE_INIT: std::sync::Once = std::sync::Once::new();
         TEST_STORE_INIT.call_once(|| {
             let dir = std::env::temp_dir().join(format!("zestful-test-{}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             let db_path = dir.join("events.db");
-            // If a stale DB file exists from a prior test run with the same
-            // pid, remove it so migrations apply clean.
             let _ = std::fs::remove_file(&db_path);
+            let _ = std::fs::remove_file(db_path.with_extension("db-wal"));
+            let _ = std::fs::remove_file(db_path.with_extension("db-shm"));
             crate::events::store::init(&db_path).expect("test store init");
         });
 
-        Router::new()
-            .route("/health", get(health))
-            .route("/focus", post(handle_focus))
-            .route(
-                "/events",
-                post(handle_events)
-                    .get(handle_list_events)
-                    .layer(DefaultBodyLimit::max(256 * 1024)),
-            )
+        build_router()
     }
 
     #[tokio::test]
