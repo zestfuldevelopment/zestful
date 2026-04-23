@@ -5,7 +5,7 @@
 pub mod schema;
 pub mod write;
 pub mod query;
-// Submodules added in later tasks: prune.
+pub mod prune;
 
 use rusqlite::Connection;
 use std::path::Path;
