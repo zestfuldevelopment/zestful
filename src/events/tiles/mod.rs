@@ -3,4 +3,5 @@
 //! 2026-04-23-tiles-projection-design.md.
 
 pub mod tile;
-// Submodules added in later tasks: surfaces, derive, cluster.
+pub mod surfaces;
+// Submodules added in later tasks: derive, cluster.
