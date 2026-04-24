@@ -97,7 +97,7 @@ pub fn run(agent_override: Option<String>) -> Result<()> {
     } else {
         None
     };
-    if let Some((slug, project)) = &codex_editor {
+    if let Some((slug, project, _)) = &codex_editor {
         crate::log::log(
             "hook",
             &format!(
@@ -110,7 +110,7 @@ pub fn run(agent_override: Option<String>) -> Result<()> {
     // Codex desktop app has no per-window focus, so per-task tiles would
     // mislead — clicking one lands on whatever Codex window is frontmost.
     // Collapse to a single `codex` tile until per-window focus exists.
-    let agent_name = if let Some((_, project)) = &codex_editor {
+    let agent_name = if let Some((_, project, _)) = &codex_editor {
         format!("Codex CLI: {}", project)
     } else if is_codex_desktop_app {
         agent_kind.slug().to_string()
@@ -129,8 +129,8 @@ pub fn run(agent_override: Option<String>) -> Result<()> {
     let terminal_uri = crate::workspace::locate().ok().or_else(|| {
         // Codex.app fired, but a VS Code-family window has an active Codex
         // tab — route focus to that window instead of Codex.app.
-        if let Some((slug, project)) = &codex_editor {
-            return Some(format!("workspace://{}/project:{}", slug, project));
+        if let Some((slug, project, window_pid)) = &codex_editor {
+            return Some(format!("workspace://{}/window:{}/project:{}", slug, window_pid, project));
         }
         // Cursor hook: synthesize a workspace-level URI when the hook's
         // parent chain doesn't reach the Cursor extension host.
@@ -168,13 +168,13 @@ pub fn run(agent_override: Option<String>) -> Result<()> {
         &agent_name,
         &policy.message,
         policy.severity.as_str(),
-        terminal_uri,
+        terminal_uri.clone(),
         !policy.push,
     )?;
 
     // Also emit structured events to the daemon. Best-effort — errors never
     // propagate. This path runs independently of the legacy /notify path.
-    let envelopes = crate::events::map_hook_payload(agent_kind, &payload);
+    let envelopes = crate::events::map_hook_payload(agent_kind, &payload, terminal_uri);
     if !envelopes.is_empty() {
         if let Err(e) = crate::events::send_to_daemon(&envelopes) {
             crate::log::log("hook", &format!("event emission failed: {}", e));
@@ -198,7 +198,7 @@ mod tests {
             "cwd": "/tmp/proj",
             "session_id": "sess_1",
         });
-        let envs = map_hook_payload(AgentKind::ClaudeCode, &payload);
+        let envs = map_hook_payload(AgentKind::ClaudeCode, &payload, None);
         assert_eq!(envs.len(), 1);
         assert_eq!(envs[0].type_, "turn.prompt_submitted");
         assert_eq!(envs[0].source, "claude-code");
@@ -217,7 +217,7 @@ mod tests {
             "hook_event_name": "beforeReadFile",
             "path": "/etc/passwd",
         });
-        let envs = map_hook_payload(AgentKind::Cursor, &payload);
+        let envs = map_hook_payload(AgentKind::Cursor, &payload, None);
         assert!(envs.is_empty());
     }
 }
