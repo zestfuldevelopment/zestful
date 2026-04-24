@@ -52,7 +52,8 @@ pub fn derive(row: &EventRow, vscode_views: &VscodeAttribution) -> Option<Derive
         let agent = match row.event_type.as_str() {
             "editor.view.visible" => {
                 let view = payload?.get("view").and_then(|v| v.as_str())?;
-                let visible = payload?.get("visible").and_then(|v| v.as_bool()).unwrap_or(false);
+                // Missing `visible` is unrecoverable — match parse_view_visible_change.
+                let visible = payload?.get("visible").and_then(|v| v.as_bool())?;
                 if !visible { return None; }
                 format!("vscode+{}", view)
             }
@@ -62,7 +63,11 @@ pub fn derive(row: &EventRow, vscode_views: &VscodeAttribution) -> Option<Derive
             }
             _ => return None,
         };
-        let project_anchor = context.get("workspace_root").and_then(|v| v.as_str())?.to_string();
+        let project_anchor = context
+            .get("workspace_root")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())?
+            .to_string();
         let surface_token = surfaces::vscode_surface_token(window_pid);
         return Some(DerivedRow {
             agent,
@@ -75,7 +80,10 @@ pub fn derive(row: &EventRow, vscode_views: &VscodeAttribution) -> Option<Derive
         });
     }
 
-    // --- CLI / terminal path ---
+    // --- CLI / terminal path (default for any source not handled above) ---
+    // Any event whose source isn't "chrome-extension" or "vscode-extension"
+    // falls through here; new emitters that don't fit are silently classified
+    // as CLI. If a new source needs different handling, add a dispatch arm above.
     let agent = context.get("agent").and_then(|v| v.as_str())?.to_string();
 
     // Project anchor priority: env vars → workspace_root → cwd.
@@ -84,15 +92,27 @@ pub fn derive(row: &EventRow, vscode_views: &VscodeAttribution) -> Option<Derive
         let from_claude = env
             .and_then(|e| e.get("CLAUDE_PROJECT_DIR"))
             .and_then(|v| v.as_str())
-            .map(String::from);
+            .map(String::from)
+            .filter(|s: &String| !s.is_empty());
         let from_gemini = env
             .and_then(|e| e.get("GEMINI_PROJECT_DIR"))
             .and_then(|v| v.as_str())
-            .map(String::from);
+            .map(String::from)
+            .filter(|s: &String| !s.is_empty());
+        let from_workspace = context
+            .get("workspace_root")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .filter(|s: &String| !s.is_empty());
+        let from_cwd = context
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .filter(|s: &String| !s.is_empty());
         from_claude
             .or(from_gemini)
-            .or_else(|| context.get("workspace_root").and_then(|v| v.as_str()).map(String::from))
-            .or_else(|| context.get("cwd").and_then(|v| v.as_str()).map(String::from))?
+            .or(from_workspace)
+            .or(from_cwd)?
     };
 
     // Surface token: tmux preferred, app_instance fallback.
@@ -126,7 +146,10 @@ pub fn parse_view_visible_change(row: &EventRow) -> Option<(String, String, bool
     let payload = row.payload.as_ref()?;
     let window_pid = context.get("application_instance").and_then(|v| v.as_str())?.to_string();
     let view = payload.get("view").and_then(|v| v.as_str())?.to_string();
-    let visible = payload.get("visible").and_then(|v| v.as_bool()).unwrap_or(false);
+    // Missing `visible` is unrecoverable — return None rather than
+    // defaulting to false, which would be interpreted by compute()
+    // as an explicit hide and mutate the rolling map.
+    let visible = payload.get("visible").and_then(|v| v.as_bool())?;
     Some((window_pid, view, visible))
 }
 
@@ -363,6 +386,66 @@ mod tests {
         let ctx = json!({ "application_instance": "12345" });
         let payload = json!({});
         let r = eventrow(17, "vscode-extension", "editor.window.focused", ctx, payload, 1000);
+        assert!(parse_view_visible_change(&r).is_none());
+    }
+
+    // --- Edge cases caught in code review ---
+
+    #[test]
+    fn derive_returns_none_when_context_is_none() {
+        let mut r = eventrow(20, "claude-code", "turn.completed", json!({}), json!({}), 1000);
+        r.context = None;
+        assert!(derive(&r, &VscodeAttribution::new()).is_none());
+    }
+
+    #[test]
+    fn derive_chrome_extension_with_none_payload_returns_none() {
+        let mut r = eventrow(21, "chrome-extension", "agent.notified", json!({}), json!({}), 1000);
+        r.payload = None;
+        assert!(derive(&r, &VscodeAttribution::new()).is_none());
+    }
+
+    #[test]
+    fn derive_vscode_with_unknown_event_type_returns_none() {
+        let ctx = json!({
+            "application_instance": "12345",
+            "workspace_root": "/x/Wibble"
+        });
+        let payload = json!({});
+        let r = eventrow(22, "vscode-extension", "editor.something_unknown", ctx, payload, 1000);
+        assert!(derive(&r, &VscodeAttribution::new()).is_none());
+    }
+
+    #[test]
+    fn derive_cli_skips_empty_string_env_var() {
+        // Empty-string env var should NOT win the priority chain;
+        // workspace_root or cwd should be used instead.
+        let ctx = json!({
+            "agent": "claude-code",
+            "cwd": "/real/path",
+            "env_vars_observed": { "CLAUDE_PROJECT_DIR": "" },
+            "subapplication": { "kind": "tmux", "session": "z", "pane": "%0" }
+        });
+        let r = eventrow(23, "claude-code", "turn.completed", ctx, json!({}), 1000);
+        let d = derive(&r, &VscodeAttribution::new()).unwrap();
+        assert_eq!(d.project_anchor, "/real/path");
+    }
+
+    #[test]
+    fn parse_view_visible_change_for_non_vscode_source_returns_none() {
+        let ctx = json!({ "application_instance": "12345" });
+        let payload = json!({ "view": "openai.chatgpt", "visible": true });
+        let r = eventrow(24, "claude-code", "editor.view.visible", ctx, payload, 1000);
+        assert!(parse_view_visible_change(&r).is_none());
+    }
+
+    #[test]
+    fn parse_view_visible_change_with_missing_visible_returns_none() {
+        // Missing `visible` is unrecoverable — return None rather than
+        // defaulting to false (which would mutate compute()'s rolling map).
+        let ctx = json!({ "application_instance": "12345" });
+        let payload = json!({ "view": "openai.chatgpt" });
+        let r = eventrow(25, "vscode-extension", "editor.view.visible", ctx, payload, 1000);
         assert!(parse_view_visible_change(&r).is_none());
     }
 }
