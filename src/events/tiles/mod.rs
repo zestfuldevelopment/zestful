@@ -4,4 +4,5 @@
 
 pub mod tile;
 pub mod surfaces;
-// Submodules added in later tasks: derive, cluster.
+pub mod derive;
+// Submodules added in later tasks: cluster.
