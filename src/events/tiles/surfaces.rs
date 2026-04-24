@@ -77,6 +77,9 @@ pub fn surface_label(surface_kind: &str, surface_token: &str) -> String {
             surface_token.to_string()
         }
         "browser" => {
+            if surface_token.is_empty() {
+                return "conversation".to_string();
+            }
             let truncated = if surface_token.chars().count() > 8 {
                 let cut: String = surface_token.chars().take(8).collect();
                 format!("{}\u{2026}", cut)
@@ -87,6 +90,9 @@ pub fn surface_label(surface_kind: &str, surface_token: &str) -> String {
         }
         "vscode" => {
             if let Some(rest) = surface_token.strip_prefix("vscode-window:") {
+                if rest.is_empty() {
+                    return "VS Code window (unknown)".to_string();
+                }
                 return format!("VS Code window {}", rest);
             }
             surface_token.to_string()
@@ -122,10 +128,15 @@ pub fn project_label(project_anchor: Option<&str>) -> Option<String> {
 /// or when the URL is malformed enough that we can't find the host.
 fn parse_host_and_path(url: &str) -> Option<(String, String)> {
     let after_scheme = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
-    let (host, path) = match after_scheme.find('/') {
+    let (host_with_port, path) = match after_scheme.find('/') {
         Some(i) => (&after_scheme[..i], &after_scheme[i..]),
         None => (after_scheme, "/"),
     };
+    // Strip explicit port (e.g. "claude.ai:443") so host matches succeed.
+    let host = host_with_port
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(host_with_port);
     if host.is_empty() {
         return None;
     }
@@ -316,5 +327,34 @@ mod tests {
     #[test]
     fn project_label_none_returns_none() {
         assert_eq!(project_label(None), None);
+    }
+
+    // --- Edge cases caught in code review ---
+
+    #[test]
+    fn browser_slug_with_port_in_url() {
+        // Port should be stripped from host so the match arm fires.
+        assert_eq!(
+            browser_conversation_slug("https://claude.ai:443/chats/abc-123").as_deref(),
+            Some("abc-123")
+        );
+    }
+
+    #[test]
+    fn browser_slug_chats_no_trailing_slash_returns_none() {
+        // /chats (without trailing /) is NOT a conversation URL.
+        assert_eq!(browser_conversation_slug("https://claude.ai/chats"), None);
+    }
+
+    #[test]
+    fn surface_label_browser_empty_token() {
+        // Defensive: empty token shouldn't produce trailing space.
+        assert_eq!(surface_label("browser", ""), "conversation");
+    }
+
+    #[test]
+    fn surface_label_vscode_empty_pid() {
+        // Defensive: empty pid in vscode-window: shouldn't produce trailing space.
+        assert_eq!(surface_label("vscode", "vscode-window:"), "VS Code window (unknown)");
     }
 }
